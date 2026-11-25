@@ -1,18 +1,18 @@
 import { ListView } from "std-widgets.slint";
-import { Theme, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, SideItem, Cover, Transport, Timeline, SearchBox } from "glass.slint";
-import { TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
+import { Theme, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
+import { Card, Shelf, HomeView, LibraryItem } from "home.slint";
+import { ThemeCard, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
 
-export { Theme, Scene, TrackRow }
-export struct Playlist { name: string, uri: string }
+export { Theme, Scene, ThemeCard, TrackRow, Card, Shelf }
 
 export component App inherits Window {
     title: root.track-title == "" ? "Quaver" : root.track-title + " · " + root.track-artist;
     icon: @image-url("icon.svg");
-    preferred-width: 1160px;
-    preferred-height: 780px;
-    min-width: 860px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 900px;
     min-height: 560px;
-    background: #101014;
+    background: Theme.glass;
     default-font-family: "Segoe UI";
     default-font-size: 14px;
 
@@ -21,7 +21,19 @@ export component App inherits Window {
     in property <bool> busy;
     in property <string> message;
     in property <string> status;
-    in property <[Playlist]> playlists;
+    in property <[Card]> playlists;
+    in property <[Card]> tiles;
+    in property <[Shelf]> shelves;
+    in property <string> greeting: "Welcome";
+    in-out property <string> home-note;
+    in-out property <bool> home-open: true;
+    in-out property <bool> panel-open: true;
+    in property <image> panel-cover;
+    // The list being opened, before its songs are here, and its picture.
+    in-out property <string> opening;
+    in-out property <string> list-picture-id;
+    in property <image> list-picture;
+    in-out property <bool> list-has-picture;
     in property <[TrackRow]> rows;
     in property <string> list-title;
     in property <string> list-context;
@@ -46,8 +58,11 @@ export component App inherits Window {
     in property <int> lyrics-active: -1;
     in property <bool> lyrics-synced;
     in property <string> lyrics-note;
-    out property <bool> lyrics-visible: root.ready && root.now-playing && root.lyrics-open;
+    out property <bool> lyrics-visible: root.ready && (root.now-playing ? root.lyrics-open : root.panel-shown);
     in-out property <bool> settings-open;
+    property <bool> list-shown: !root.home-open && !root.settings-open;
+    property <bool> panel-shown: root.panel-open && root.width >= 1160px && root.track-title != "";
+    property <length> library-width: max(220px, min(300px, root.width * 0.22));
     in property <bool> eq-on;
     in property <[float]> eq;
     in property <[string]> presets;
@@ -55,6 +70,36 @@ export component App inherits Window {
     in property <bool> normalise;
     in property <bool> tray;
     in property <bool> needs-restart;
+    in property <bool> soloist;
+    in property <string> player-note;
+    callback set-soloist(bool);
+    callback soloist-key(string);
+    callback soloist-folder();
+    callback soloist-download();
+    callback soloist-get-key();
+    callback soloist-about();
+    callback discord();
+    // Who is in the current Jam; nobody when there is none.
+    in property <[string]> jam;
+    in property <string> jam-link;
+    in-out property <bool> jam-open;
+    callback copy-jam-link();
+    in property <bool> soloist-here;
+    in property <bool> soloist-has-key;
+    in property <bool> downloading;
+    in property <[ThemeCard]> themes;
+    in property <string> theme;
+    in property <bool> glass-theme: true;
+    callback set-theme-id(string);
+    callback settings-shown();
+    changed settings-open => { if (root.settings-open) { root.settings-shown(); } }
+    in-out property <string> toast;
+    in-out property <bool> blocked;
+    in property <bool> gliding;
+    // Which row the pointer is on; none while the list moves under it.
+    property <int> hovered-row: Scene.hovering && !root.gliding && root.over-list() ? floor((Scene.mouse-y - area.absolute-position.y - list.content-y) / 60px) : -1;
+    public function show-toast() { toast-timer.restart(); }
+    toast-timer := Timer { interval: 6s; running: root.toast != ""; triggered => { root.toast = ""; } }
 
     callback connect();
     callback logout();
@@ -63,10 +108,15 @@ export component App inherits Window {
     callback clear-queue();
     callback open(string, string);
     callback search(string);
+    callback typed(string);
+    callback stop-glide();
     callback more();
     callback play(string);
     callback enqueue(string);
-    callback need-cover(string);
+    callback need-picture(int, string);
+    callback play-list(string);
+    callback load-home();
+    callback retry-home();
     callback toggle();
     callback next();
     callback prev();
@@ -87,20 +137,88 @@ export component App inherits Window {
     callback set-normalise(bool);
     callback set-tray(bool);
     callback set-tint(float);
+    callback set-motion(bool);
+    callback glide(float);
+    in property <float> bounce;
 
+    property <length> home-rest: max(0px, home.content-height - home.visible-height);
+    property <length> rest: max(0px, list.content-height - list.visible-height);
+    // Long lists get a tall header that folds away while scrolling.
+    // Folding gives the list 54px, so it has to overflow by clearly more than that. 356px is
+    // everything above and below the list while the header is tall.
+    property <bool> foldable: root.rows.length * 60px - (root.height - 356px) > 150px;
+    property <bool> folded;
+    property <length> scrolled: -list.content-y;
+    property <bool> tall: !root.settings-open && !root.folded;
+    changed scrolled => {
+        if (root.folded) {
+            if (root.scrolled < 8px) { root.folded = false; }
+        } else if (root.foldable && root.scrolled > 30px) {
+            root.folded = true;
+        }
+    }
+
+    in property <bool> can-go-back;
+    in property <bool> can-go-forward;
+    callback go-back();
+    callback go-forward();
+    public function go-home() {
+        root.settings-open = false;
+        root.home-open = true;
+        root.load-home();
+    }
+    public function show-list(uri: string, picture: string) {
+        root.settings-open = false;
+        root.home-open = false;
+        root.opening = uri;
+        root.list-has-picture = false;
+        root.list-picture-id = picture;
+        if (picture != "") { root.need-picture(3, picture); }
+    }
+    function open-card(card: Card) {
+        root.show-list(card.uri, card.picture-id);
+        if (card.uri == "liked" || card.title == "Liked Songs") { root.liked(); } else { root.open(card.title, card.uri); }
+    }
     public function reset-scroll() { list.content-y = 0; }
+    public pure function over-list() -> bool {
+        return root.ready && !root.now-playing && !root.settings-open && Scene.mouse-x >= area.absolute-position.x && Scene.mouse-x < area.absolute-position.x + area.width && Scene.mouse-y >= area.absolute-position.y && Scene.mouse-y < area.absolute-position.y + area.height;
+    }
+    // True when an end of the list stopped the movement.
+    public function scroll-by(distance: float) -> bool {
+        if (root.home-open) {
+            home.content-y = max(-root.home-rest, min(0px, home.content-y + distance * 1px));
+            return (distance > 0 && home.content-y >= 0px) || (distance < 0 && home.content-y <= -root.home-rest);
+        }
+        list.content-y = max(-root.rest, min(0px, list.content-y + distance * 1px));
+        root.load-ahead();
+        return (distance > 0 && list.content-y >= 0px) || (distance < 0 && list.content-y <= -root.rest);
+    }
+    function load-ahead() {
+        if (root.has-more && !root.loading && -list.content-y > list.content-height - list.visible-height * 2) { root.more(); }
+    }
 
-    init => { Scene.width = root.width; Scene.height = root.height; }
-    changed width => { Scene.width = root.width; }
-    changed height => { Scene.height = root.height; }
+    // Anything that changes what has to be painted behind the content.
+    callback repaint();
+    changed width => { root.repaint(); }
+    changed height => { root.repaint(); }
+    changed ready => { root.repaint(); }
+    changed now-playing => { root.repaint(); }
+    changed panel-shown => {
+        if (!root.panel-shown) { Scene.placed(4, 0, 0, 0, 0); }
+    }
     changed lyrics-visible => { root.lyrics-wanted(); }
 
-    Timer { interval: root.lyrics-visible ? 150ms : 500ms; running: root.playing && root.visible; triggered => { root.tick(); } }
+    Timer { interval: root.lyrics-visible && root.lyrics-synced ? 150ms : 500ms; running: root.playing && root.visible; triggered => { root.tick(); } }
 
     Backdrop { width: 100%; height: 100%; }
 
     forward-focus: keys;
     keys := FocusScope {
+        // Anchored, so that the window is never sized from its content.
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
         key-pressed(e) => {
             if (e.text == Key.F11) { root.toggle-fullscreen(); return accept; }
             if (e.text == Key.Escape) {
@@ -110,10 +228,13 @@ export component App inherits Window {
                 return accept;
             }
             if (!root.ready) { return reject; }
+            if (e.modifiers.alt && e.text == Key.LeftArrow) { root.go-back(); return accept; }
+            if (e.modifiers.alt && e.text == Key.RightArrow) { root.go-forward(); return accept; }
             if (e.text == " ") { root.toggle(); return accept; }
             if (e.modifiers.control && e.text == Key.RightArrow) { root.next(); return accept; }
             if (e.modifiers.control && e.text == Key.LeftArrow) { root.prev(); return accept; }
             if (e.modifiers.control && e.text == "f") { root.now-playing = false; search.take-focus(); return accept; }
+            if (e.modifiers.control && e.text == "h") { root.now-playing = false; root.go-home(); return accept; }
             if (e.modifiers.control && e.text == ",") { root.now-playing = false; root.settings-open = true; return accept; }
             return reject;
         }
@@ -173,65 +294,122 @@ export component App inherits Window {
 
         VerticalLayout {
             visible: root.ready && !root.now-playing;
-            padding: 14px;
-            spacing: 14px;
+            padding: 12px;
+            spacing: 12px;
+            HorizontalLayout {
+                height: 46px;
+                spacing: 12px;
+                HorizontalLayout {
+                    width: root.library-width;
+                    padding-left: 8px;
+                    spacing: 10px;
+                    VerticalLayout { alignment: center; Image { source: @image-url("icon.svg"); width: 28px; height: 28px; } }
+                    Text { text: "Quaver"; color: Theme.text; font-size: 17px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                    VerticalLayout { alignment: center; Icon { glyph: "\u{e72b}"; label: "Back"; enabled: root.can-go-back || root.settings-open; clicked => { root.go-back(); } } }
+                    VerticalLayout { alignment: center; Icon { glyph: "\u{e72a}"; label: "Forward"; enabled: root.can-go-forward; clicked => { root.go-forward(); } } }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout { alignment: center; Icon { glyph: "\u{e80f}"; label: "Home"; on: root.home-open && !root.settings-open; size: 18px; clicked => { root.go-home(); } } }
+                VerticalLayout {
+                    width: min(480px, root.width * 0.42);
+                    alignment: center;
+                    search := SearchBox { edited(q) => { root.typed(q); } accepted(q) => { root.settings-open = false; root.search(q); } }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                HorizontalLayout {
+                    width: 88px;
+                    spacing: 6px;
+                    alignment: end;
+                    VerticalLayout { alignment: center; Icon { glyph: "\u{e713}"; label: "Settings"; on: root.settings-open; size: 18px; clicked => { root.settings-open = !root.settings-open; } } }
+                }
+            }
             HorizontalLayout {
                 vertical-stretch: 1;
-                spacing: 14px;
+                spacing: 12px;
                 Glass {
-                    width: 236px;
+                    panel: 1;
+                    width: root.library-width;
                     VerticalLayout {
-                        padding: 14px;
+                        padding: 12px;
                         spacing: 4px;
-                        SideItem { text: "Liked Songs"; glyph: "\u{eb51}"; selected: !root.settings-open && root.list-title == self.text; clicked => { root.settings-open = false; root.liked(); } }
-                        SideItem { text: "Up next"; glyph: "\u{e8fd}"; selected: !root.settings-open && root.list-title == self.text; clicked => { root.settings-open = false; root.queue(); } }
-                        Rectangle { height: 14px; }
-                        HorizontalLayout { padding-left: 14px; Text { text: "Playlists"; color: Theme.dim; font-size: 12px; } }
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            height: 34px;
+                            spacing: 10px;
+                            Text { text: "\u{e8f1}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; }
+                            Text { text: "Your library"; color: Theme.text; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                        }
+                        LibraryItem {
+                            card: { title: "Liked Songs", subtitle: "Your favorites", uri: "liked", picture-id: "", kind: 0 };
+                            selected: root.list-shown && root.list-title == "Liked Songs";
+                            clicked => { root.show-list("liked", ""); root.liked(); }
+                        }
                         ListView {
                             vertical-stretch: 1;
-                            for p in root.playlists: SideItem {
-                                text: p.name;
-                                selected: !root.settings-open && root.list-context == p.uri;
-                                clicked => { root.settings-open = false; root.open(p.name, p.uri); }
+                            for p in root.playlists: LibraryItem {
+                                card: p;
+                                selected: root.list-shown && root.list-context == p.uri;
+                                clicked => { root.open-card(p); }
+                                need-picture(kind, id) => { root.need-picture(kind, id); }
                             }
                         }
-                        SideItem { text: "Settings"; glyph: "\u{e713}"; selected: root.settings-open; clicked => { root.settings-open = !root.settings-open; } }
                     }
                 }
                 Glass {
+                    panel: 2;
                     horizontal-stretch: 1;
                     VerticalLayout {
-                        padding: 20px;
-                        spacing: 14px;
-                        search := SearchBox { accepted(q) => { root.settings-open = false; root.search(q); } }
-                        HorizontalLayout {
-                            height: 50px;
-                            spacing: 12px;
+                        padding: 18px;
+                        spacing: 12px;
+                        if !root.home-open || root.settings-open: HorizontalLayout {
+                            height: root.tall ? 104px : 50px;
+                            animate height { duration: Theme.quick * 1.5; easing: ease-in-out; }
+                            spacing: 16px;
                             padding-left: 8px;
-                            Text { text: root.settings-open ? "Settings" : root.list-title; font-size: 32px; font-weight: 600; color: Theme.text; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                            if root.tall && !root.settings-open && root.list-has-picture: VerticalLayout { alignment: center; Image { source: root.list-picture; width: 88px; height: 88px; } }
+                            Text { text: root.settings-open ? "Settings" : root.list-title; font-size: root.tall ? 42px : 28px; font-weight: 700; color: Theme.text; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; animate font-size { duration: Theme.quick * 1.5; easing: ease-in-out; } }
                             if !root.settings-open && root.list-title == "Up next": VerticalLayout { alignment: center; Pill { quiet: true; text: "Clear queue"; clicked => { root.clear-queue(); } } }
-                            if !root.settings-open && root.rows.length > 0: PlayButton { size: 48px; clicked => { root.play(root.rows[0].uri); } }
+                            // Aims past the top: the list shifts a little while rows come and go on the way.
+                            if !root.settings-open && root.scrolled > 900px: VerticalLayout { alignment: center; Icon { glyph: "\u{e74a}"; label: "Back to top"; clicked => { if (Theme.motion) { root.glide(root.scrolled / 1px * 1.2 + 100); } else { root.reset-scroll(); } } } }
+                            if !root.settings-open && root.rows.length > 0: VerticalLayout { alignment: center; PlayButton { size: 50px; clicked => { root.play(root.rows[0].uri); } } }
                         }
-                        Rectangle {
+                        area := Rectangle {
                             vertical-stretch: 1;
-                            list := ListView {
-                                visible: !root.settings-open;
+                            clip: true;
+                            home := HomeView {
+                                visible: root.home-open && !root.settings-open;
+                                y: self.visible ? root.bounce * 1px : 0px;
                                 width: 100%;
                                 height: 100%;
-                                scrolled => {
-                                    if (root.has-more && !root.loading && -self.content-y > self.content-height - self.visible-height * 2) { root.more(); }
-                                }
-                                for r in root.rows: Row {
+                                animate y { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                                greeting: root.greeting;
+                                note: root.home-note;
+                                tiles: root.tiles;
+                                shelves: root.shelves;
+                                open(c) => { root.open-card(c); }
+                                play(uri) => { root.play-list(uri); }
+                                need-picture(kind, id) => { root.need-picture(kind, id); }
+                                retry => { root.home-note = ""; root.retry-home(); }
+                            }
+                            list := ListView {
+                                visible: root.list-shown;
+                                y: root.bounce * 1px;
+                                width: 100%;
+                                height: 100%;
+                                animate y { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                                scrolled => { root.load-ahead(); }
+                                for r[i] in root.rows: Row {
                                     item: r;
+                                    lit: i == root.hovered-row;
                                     current: r.title == root.track-title && r.artist == root.track-artist;
                                     play => { root.play(r.uri); }
                                     enqueue => { root.enqueue(r.uri); }
-                                    open(name, uri) => { root.open(name, uri); }
-                                    need-cover(id) => { root.need-cover(id); }
+                                    open(name, uri) => { root.show-list(uri, ""); root.open(name, uri); }
+                                    need-cover(id) => { root.need-picture(0, id); }
                                 }
                             }
-                            if !root.settings-open && root.rows.length == 0: Text {
-                                text: root.loading ? "Loading…" : root.list-title == "" ? "Pick a playlist, or search for something" : root.status;
+                            if root.list-shown && root.rows.length == 0: Text {
+                                text: root.loading ? "Loading…" : root.status;
                                 color: Theme.dim;
                                 font-size: 16px;
                                 horizontal-alignment: center;
@@ -247,6 +425,22 @@ export component App inherits Window {
                                 normalise: root.normalise;
                                 tray: root.tray;
                                 needs-restart: root.needs-restart;
+                                soloist: root.soloist;
+                                player-note: root.player-note;
+                                set-soloist(v) => { root.set-soloist(v); }
+                                soloist-key(k) => { root.soloist-key(k); }
+                                soloist-folder => { root.soloist-folder(); }
+                                soloist-download => { root.soloist-download(); }
+                                soloist-get-key => { root.soloist-get-key(); }
+                                soloist-about => { root.soloist-about(); }
+                                soloist-here: root.soloist-here;
+                                soloist-has-key: root.soloist-has-key;
+                                downloading: root.downloading;
+                                themes: root.themes;
+                                theme: root.theme;
+                                glass-theme: root.glass-theme;
+                                set-theme-id(id) => { root.set-theme-id(id); }
+                                discord => { root.discord(); }
                                 set-eq-on(v) => { root.set-eq-on(v); }
                                 set-band(i, v) => { root.set-band(i, v); }
                                 set-preset(i) => { root.set-preset(i); }
@@ -254,40 +448,83 @@ export component App inherits Window {
                                 set-normalise(v) => { root.set-normalise(v); }
                                 set-tray(v) => { root.set-tray(v); }
                                 set-tint(v) => { root.set-tint(v); }
+                                set-motion(v) => { root.set-motion(v); }
                                 logout => { root.settings-open = false; root.logout(); }
                             }
                         }
-                        if root.settings-open ? root.status != "" : root.rows.length > 0 && (root.loading || root.status != ""): Text { text: root.loading ? "Loading more…" : root.status; color: Theme.dim; overflow: elide; }
+                        if root.list-shown && root.rows.length > 0 && root.loading: Text { text: "Loading…"; color: Theme.dim; overflow: elide; }
+                    }
+                }
+                if root.panel-shown: Glass {
+                    panel: 4;
+                    width: 288px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+                        alignment: start;
+                        HorizontalLayout {
+                            height: 34px;
+                            Text { text: "Now playing"; color: Theme.text; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                            Icon { glyph: "\u{e711}"; label: "Close the now playing panel"; size: 12px; clicked => { root.panel-open = false; } }
+                        }
+                        panel-touch := TouchArea {
+                            height: 256px;
+                            mouse-cursor: pointer;
+                            accessible-role: button;
+                            accessible-label: "Open now playing";
+                            accessible-action-default => { root.now-playing = true; }
+                            clicked => { root.now-playing = true; }
+                            Rectangle { border-radius: 20px; background: Theme.raised; visible: !root.has-cover; }
+                            if root.has-cover: Image { width: 256px; height: 256px; source: root.panel-cover; }
+                            Rectangle { visible: panel-touch.has-hover || panel-focus.has-focus; border-radius: 20px; border-width: 2px; border-color: Theme.accent; }
+                            panel-focus := KeyFocus { activated => { root.now-playing = true; } }
+                        }
+                        Text { text: root.track-title; color: Theme.text; font-size: 20px; font-weight: 700; wrap: word-wrap; }
+                        Text { text: root.track-artist; color: Theme.accent; wrap: word-wrap; }
+                        Text { text: root.track-album; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+                        if root.lyrics-synced && root.lyrics.length > 0: VerticalLayout {
+                            padding-top: 10px;
+                            spacing: 8px;
+                            Text { text: "Lyrics"; color: Theme.dim; font-size: 12px; }
+                            Text { text: root.lyrics-active >= 0 ? root.lyrics[root.lyrics-active] : "♪"; color: Theme.text; font-size: 17px; font-weight: 700; wrap: word-wrap; }
+                            Text { text: root.lyrics-active + 1 < root.lyrics.length ? root.lyrics[root.lyrics-active + 1] : ""; color: Theme.dim; font-size: 15px; font-weight: 600; wrap: word-wrap; }
+                        }
                     }
                 }
             }
             Glass {
-                height: 96px;
+                panel: 3;
+                height: 92px;
                 HorizontalLayout {
-                    padding: 15px;
+                    padding: 13px;
                     spacing: 16px;
-                    open-cover := TouchArea {
-                        width: 66px;
-                        mouse-cursor: pointer;
-                        accessible-role: button;
-                        accessible-label: "Open now playing";
-                        accessible-action-default => { root.now-playing = true; }
-                        clicked => { root.now-playing = true; }
-                        Cover { source: root.thumb; loaded: root.has-cover; }
-                        Rectangle {
-                            visible: open-cover.has-hover || cover-focus.has-focus;
-                            border-radius: 12px;
-                            background: #00000099;
-                            Text { text: "\u{e740}"; font-family: Theme.icons; font-size: 18px; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                    HorizontalLayout {
+                        width: max(240px, root.width * 0.24);
+                        spacing: 14px;
+                        open-cover := TouchArea {
+                            width: 66px;
+                            mouse-cursor: pointer;
+                            accessible-role: button;
+                            accessible-label: "Open now playing";
+                            accessible-action-default => { root.now-playing = true; }
+                            clicked => { root.now-playing = true; }
+                            Cover { source: root.thumb; loaded: root.has-cover; }
+                            Rectangle {
+                                visible: open-cover.has-hover || cover-focus.has-focus;
+                                border-radius: 12px;
+                                background: #00000099;
+                                Text { text: "\u{e740}"; font-family: Theme.icons; font-size: 18px; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            cover-focus := KeyFocus { activated => { root.now-playing = true; } }
                         }
-                        cover-focus := KeyFocus { activated => { root.now-playing = true; } }
-                    }
-                    VerticalLayout {
-                        width: 180px;
-                        alignment: center;
-                        spacing: 2px;
-                        Text { text: root.track-title; color: Theme.text; font-weight: 600; overflow: elide; }
-                        Text { text: root.track-artist; color: Theme.dim; font-size: 12px; overflow: elide; }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: root.track-title; color: Theme.text; font-weight: 600; overflow: elide; }
+                            Text { text: root.track-artist; color: Theme.dim; font-size: 12px; overflow: elide; }
+                        }
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
@@ -305,15 +542,106 @@ export component App inherits Window {
                         }
                         Timeline { progress: root.progress; elapsed: root.elapsed; total: root.total; seek(v) => { root.seek(v); } }
                     }
-                    VerticalLayout { alignment: center; Icon { glyph: "\u{e8bd}"; label: "Open lyrics"; clicked => { root.lyrics-open = true; root.now-playing = true; } } }
                     HorizontalLayout {
-                        width: 130px;
-                        spacing: 8px;
-                        Text { text: "\u{e767}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; }
+                        width: max(240px, root.width * 0.24);
+                        spacing: 4px;
+                        alignment: end;
+                        if root.soloist: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: root.jam.length > 0 ? "Jam, " + root.jam.length + " listening" : "Jam"; on: root.jam.length > 0; clicked => { root.jam-open = !root.jam-open; } } }
+                        VerticalLayout { alignment: center; Icon { glyph: "\u{e8bd}"; label: "Open lyrics"; clicked => { root.lyrics-open = true; root.now-playing = true; } } }
+                        VerticalLayout { alignment: center; Icon { glyph: "\u{e8fd}"; label: "Up next"; on: root.list-shown && root.list-title == "Up next"; clicked => { root.show-list("", ""); root.queue(); } } }
+                        if root.width >= 1160px: VerticalLayout { alignment: center; Icon { glyph: "\u{e90d}"; label: root.panel-open ? "Close the now playing panel" : "Open the now playing panel"; on: root.panel-shown; clicked => { root.panel-open = !root.panel-open; } } }
+                        Text { width: 26px; text: "\u{e767}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; horizontal-alignment: right; }
                         VerticalLayout {
+                            width: 104px;
                             alignment: center;
                             Bar { value: root.volume; label: "Volume"; live: true; commit(v) => { root.set-volume(v); } }
                         }
+                    }
+                }
+            }
+        }
+
+        if root.jam-open && root.ready && !root.now-playing: Rectangle {
+            width: root.width;
+            height: root.height;
+            TouchArea { clicked => { root.jam-open = false; } }
+            FocusScope {
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    if (e.text == Key.Escape) { root.jam-open = false; return accept; }
+                    return reject;
+                }
+            }
+            Rectangle {
+                x: root.width - 360px;
+                y: root.height - 116px - self.height;
+                width: 340px;
+                height: jam-box.preferred-height;
+                border-radius: 18px;
+                background: Theme.bright ? #fcfaf6 : #17171d;
+                border-width: 1px;
+                border-color: Theme.hover-line;
+                TouchArea { }
+                jam-box := VerticalLayout {
+                    padding: 22px;
+                    spacing: 12px;
+                    Text { text: root.jam.length > 0 ? "Jam" : "No Jam right now"; color: Theme.text; font-size: 18px; font-weight: 700; }
+                    if root.jam.length == 0: Text { text: "Start or join one in the Spotify app and pick Quaver as the speaker. It shows up here, and Quaver leaves the order of songs to the Jam."; color: Theme.dim; wrap: word-wrap; }
+                    for name in root.jam: HorizontalLayout {
+                        spacing: 10px;
+                        Text { width: 18px; text: "\u{e77b}"; font-family: Theme.icons; color: Theme.accent; vertical-alignment: center; }
+                        Text { text: name; color: Theme.text; overflow: elide; vertical-alignment: center; }
+                    }
+                    if root.jam-link != "": HorizontalLayout { alignment: start; Pill { quiet: true; text: "Copy invite link"; clicked => { root.copy-jam-link(); } } }
+                }
+            }
+        }
+
+        // Says something where it can't be missed.
+        if root.toast != "": Rectangle {
+            x: (root.width - self.width) / 2;
+            y: root.height - 176px;
+            width: min(root.width - 80px, toast-text.preferred-width + 48px);
+            height: max(46px, toast-text.preferred-height + 22px);
+            border-radius: 23px;
+            background: Theme.bright ? #fffffff5 : #16161cf5;
+            border-width: 1px;
+            border-color: Theme.hover-line;
+            accessible-role: text;
+            accessible-label: root.toast;
+            toast-text := Text { text: root.toast; color: Theme.text; wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center; }
+        }
+
+        if root.blocked: Rectangle {
+            width: root.width;
+            height: root.height;
+            background: #000000a6;
+            TouchArea { }
+            FocusScope {
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    if (e.text == Key.Escape) { root.blocked = false; return accept; }
+                    return reject;
+                }
+            }
+            Rectangle {
+                width: min(560px, root.width - 64px);
+                height: dialog.preferred-height;
+                border-radius: 24px;
+                background: Theme.bright ? #fcfaf6 : #17171d;
+                border-width: 1px;
+                border-color: Theme.hover-line;
+                dialog := VerticalLayout {
+                    padding: 34px;
+                    spacing: 16px;
+                    Text { text: "Spotify won't let this account play here yet"; color: Theme.text; font-size: 22px; font-weight: 700; wrap: word-wrap; }
+                    Text { text: "Quaver found the song, but Spotify refused to unlock it for the built-in player. It does that for newer accounts, and no app can change it."; color: Theme.dim; wrap: word-wrap; }
+                    Text { text: "Soloist is Spotify's own small player, and Quaver can play through it. It takes a download, a free key from Spotify, and picking Quaver once in the Spotify app."; color: Theme.dim; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+                        Pill { text: "Set up Soloist"; clicked => { root.blocked = false; root.now-playing = false; root.settings-open = true; } }
+                        VerticalLayout { alignment: center; Pill { quiet: true; text: "Not now"; clicked => { root.blocked = false; } } }
                     }
                 }
             }

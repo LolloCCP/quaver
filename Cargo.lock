@@ -4668,6 +4668,8 @@ version = "0.1.0"
 dependencies = [
  "env_logger",
  "form_urlencoded",
+ "futures-util",
+ "http",
  "librespot-connect",
  "librespot-core",
  "librespot-metadata",
@@ -4677,11 +4679,14 @@ dependencies = [
  "log",
  "protobuf",
  "protobuf-json-mapping",
+ "rand 0.9.5",
  "raw-window-handle",
+ "serde_json",
  "slint",
  "slint-build",
  "souvlaki",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -5432,6 +5437,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
@@ -6160,6 +6166,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

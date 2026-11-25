@@ -11,8 +11,11 @@ The saved login is `%LOCALAPPDATA%\Quaver\credentials.json`; "Sign out" deletes 
 
 librespot is unofficial and not approved by Spotify. Use it at your own risk.
 
-Shortcuts: Space play/pause, Ctrl+Left/Right previous/next, Ctrl+F search, Ctrl+, settings, F11 full screen, Esc leave.
+Shortcuts: Space play/pause, Ctrl+Left/Right previous/next, Alt+Left/Right back/forward, Ctrl+F search, Ctrl+H home, Ctrl+, settings, F11 full screen, Esc leave.
 
 Settings are in `%LOCALAPPDATA%Quaversettings.txt`.
 
 Can't connect? `cargo test probe -- --ignored --nocapture` prints why this network can't reach Spotify.
+
+Songs refused ("audio key error")? Spotify doesn't let librespot play on newer accounts. Choose Spotify Soloist
+in Settings; it needs your own API key and a build from Spotify that lasts 90 days.

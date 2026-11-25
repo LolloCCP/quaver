@@ -1,0 +1,216 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, KeyFocus, Icon, Pill, PlayButton } from "glass.slint";
+
+// Opens a list. `kind` says how its picture is drawn (KINDS in main.rs).
+export struct Card { title: string, subtitle: string, uri: string, picture-id: string, kind: int, picture: image, has-picture: bool }
+export struct Shelf { title: string, cards: [Card] }
+
+export component Picture inherits Rectangle {
+    in property <Card> card;
+    in property <length> size;
+    width: root.size;
+    height: root.size;
+    if !root.card.has-picture: Rectangle {
+        border-radius: root.card.kind == 2 ? root.size / 2 : root.size * 0.14;
+        background: @linear-gradient(145deg, Theme.fill.with-alpha(0.55) 0%, Theme.fill2.with-alpha(0.35) 100%);
+        Text { text: root.card.uri == "liked" || root.card.title == "Liked Songs" ? "\u{eb52}" : "\u{e8d6}"; font-family: Theme.icons; font-size: root.size * 0.36; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    Image {
+        width: 100%;
+        height: 100%;
+        source: root.card.picture;
+        opacity: root.card.has-picture ? 1 : 0;
+        animate opacity { duration: Theme.quick * 1.5; }
+    }
+}
+
+component Tile inherits Rectangle {
+    in property <Card> card;
+    callback open();
+    callback play();
+    property <bool> lit: touch.has-hover || go.has-hover;
+    height: 60px;
+    border-radius: 14px;
+    background: root.lit ? Theme.over.with-alpha(0.12) : Theme.raised;
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: focus.has-focus ? Theme.accent : root.lit ? Theme.hover-line : Theme.over.with-alpha(0.1);
+    animate background { duration: Theme.quick; }
+    accessible-role: button;
+    accessible-label: card.title;
+    accessible-action-default => { root.open(); }
+    focus := KeyFocus { activated => { root.open(); } }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
+    HorizontalLayout {
+        padding: 6px;
+        padding-right: 10px;
+        spacing: 10px;
+        Picture { card: root.card; size: 48px; }
+        Text { text: card.title; color: Theme.text; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; }
+        VerticalLayout {
+            alignment: center;
+            width: root.lit ? 36px : 0px;
+            go := PlayButton { visible: root.lit; size: 36px; clicked => { root.play(); } }
+        }
+    }
+}
+
+component CardView inherits Rectangle {
+    in property <Card> card;
+    callback open();
+    callback play();
+    property <bool> lit: touch.has-hover || go.has-hover;
+    width: 176px;
+    border-radius: 18px;
+    background: root.lit ? Theme.selected : transparent;
+    border-width: focus.has-focus ? 2px : root.lit ? 1px : 0px;
+    border-color: focus.has-focus ? Theme.accent : Theme.line;
+    animate background { duration: Theme.quick; }
+    accessible-role: button;
+    accessible-label: card.title + ", " + card.subtitle;
+    accessible-action-default => { root.open(); }
+    focus := KeyFocus { activated => { root.open(); } }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
+    Picture { x: 10px; y: 10px; card: root.card; size: 156px; }
+    go := PlayButton {
+        x: 10px + 156px - 52px;
+        y: root.lit ? 10px + 156px - 52px : 10px + 156px - 44px;
+        size: 44px;
+        visible: self.opacity > 0;
+        opacity: root.lit ? 1 : 0;
+        animate y, opacity { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        clicked => { root.play(); }
+    }
+    Text { x: 12px; y: 174px; width: 152px; text: card.title; color: Theme.text; font-weight: 600; overflow: elide; }
+    Text { x: 12px; y: 194px; width: 152px; height: 36px; text: card.subtitle; color: Theme.dim; font-size: 12px; wrap: word-wrap; overflow: elide; }
+}
+
+component ShelfView inherits Rectangle {
+    in property <Shelf> shelf;
+    in property <bool> near;
+    callback open(Card);
+    callback play(string);
+    callback need-picture(int, string);
+    property <length> end: max(0px, row.content-width - row.width);
+    function ask() {
+        if (root.near) { root.asked = true; }
+    }
+    property <bool> asked;
+    init => { root.ask(); }
+    changed near => { root.ask(); }
+    height: 290px;
+    Text { x: 8px; y: 8px; width: parent.width - 110px; text: shelf.title; color: Theme.text; font-size: 22px; font-weight: 700; overflow: elide; }
+    if root.end > 0px: HorizontalLayout {
+        x: parent.width - 88px;
+        y: 4px;
+        width: 80px;
+        height: 36px;
+        spacing: 8px;
+        Icon { glyph: "\u{e76b}"; label: "Back in " + shelf.title; size: 13px; clicked => { row.content-x = min(0px, row.content-x + row.width * 0.8); } }
+        Icon { glyph: "\u{e76c}"; label: "More in " + shelf.title; size: 13px; clicked => { row.content-x = max(-root.end, row.content-x - row.width * 0.8); } }
+    }
+    row := Flickable {
+        y: 44px;
+        width: 100%;
+        height: 238px;
+        content-width: shelf.cards.length * 182px;
+        content-height: self.height;
+        animate content-x { duration: Theme.quick * 2; easing: ease-in-out; }
+        for c[i] in shelf.cards: CardView {
+            x: i * 182px;
+            height: 238px;
+            card: c;
+            // Pictures are only fetched for shelves that are about to be seen.
+            property <bool> wanted: root.asked && !c.has-picture;
+            changed wanted => { if (self.wanted) { root.need-picture(c.kind, c.picture-id); } }
+            init => { if (self.wanted) { root.need-picture(c.kind, c.picture-id); } }
+            open => { root.open(c); }
+            play => { root.play(c.uri); }
+        }
+    }
+}
+
+export component HomeView inherits ScrollView {
+    in property <string> greeting;
+    in property <string> note;
+    in property <[Card]> tiles;
+    in property <[Shelf]> shelves;
+    callback open(Card);
+    callback play(string);
+    callback need-picture(int, string);
+    callback retry();
+    property <int> columns: self.visible-width > 900px ? 4 : self.visible-width > 560px ? 3 : 2;
+    // Only full rows of tiles.
+    property <int> shown-tiles: min(root.tiles.length, root.columns == 2 ? 6 : root.columns * 2);
+    property <length> tile: (self.visible-width - 16px - (root.columns - 1) * 10px) / root.columns;
+    content-width: self.visible-width;
+    VerticalLayout {
+        alignment: start;
+        padding-top: 4px;
+        padding-bottom: 16px;
+        spacing: 14px;
+        HorizontalLayout { padding-left: 8px; Text { text: root.greeting; color: Theme.text; font-size: 32px; font-weight: 700; } }
+        if root.note != "": HorizontalLayout {
+            padding-left: 8px;
+            spacing: 14px;
+            alignment: start;
+            Text { text: root.note; color: Theme.dim; vertical-alignment: center; }
+            Pill { quiet: true; text: "Try again"; clicked => { root.retry(); } }
+        }
+        if root.note == "" && root.shelves.length == 0: HorizontalLayout { padding-left: 8px; Text { text: "Loading…"; color: Theme.dim; } }
+        Rectangle {
+            height: ceil(root.shown-tiles / root.columns) * 70px;
+            for c[i] in root.tiles: Tile {
+                visible: i < root.shown-tiles;
+                x: 8px + mod(i, root.columns) * (root.tile + 10px);
+                y: floor(i / root.columns) * 70px;
+                width: root.tile;
+                card: c;
+                init => { if (!c.has-picture) { root.need-picture(c.kind, c.picture-id); } }
+                open => { root.open(c); }
+                play => { root.play(c.uri); }
+            }
+        }
+        for s in root.shelves: ShelfView {
+            shelf: s;
+            near: self.y + root.content-y < root.visible-height + 300px;
+            open(c) => { root.open(c); }
+            play(uri) => { root.play(uri); }
+            need-picture(kind, id) => { root.need-picture(kind, id); }
+        }
+    }
+}
+
+// A playlist in the library on the left.
+export component LibraryItem inherits TouchArea {
+    in property <Card> card;
+    in property <bool> selected;
+    callback need-picture(int, string);
+    init => { if (!card.has-picture) { root.need-picture(card.kind, card.picture-id); } }
+    height: 60px;
+    mouse-cursor: pointer;
+    accessible-role: button;
+    accessible-label: card.title;
+    accessible-action-default => { root.clicked(); }
+    Rectangle {
+        border-radius: 14px;
+        background: root.selected || root.has-hover ? Theme.selected : transparent;
+        border-width: focus.has-focus ? 2px : root.selected || root.has-hover ? 1px : 0px;
+        border-color: focus.has-focus ? Theme.accent : Theme.line;
+        animate background { duration: Theme.quick; }
+    }
+    focus := KeyFocus { activated => { root.clicked(); } }
+    HorizontalLayout {
+        padding: 6px;
+        padding-right: 10px;
+        spacing: 12px;
+        Picture { card: root.card; size: 48px; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            Text { text: card.title; color: root.selected ? Theme.accent : Theme.text; overflow: elide; }
+            Text { text: card.subtitle; color: Theme.dim; font-size: 12px; overflow: elide; }
+        }
+    }
+}
