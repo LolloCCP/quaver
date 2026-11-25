@@ -223,7 +223,7 @@ pub async fn run(
     let mut output_check = tokio::time::interval(OUTPUT_CHECK);
     let mut jam_check = tokio::time::interval(JAM_CHECK);
     let (jam_tx, mut jams) = mpsc::unbounded_channel();
-    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2 };
+    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2, asked: String::new(), starting: false, context: String::new(), autoplay: vec![] };
     player.volume = cache.volume().unwrap_or(u16::MAX / 2);
 
     loop {
@@ -345,6 +345,13 @@ struct Player {
     catch_up: Option<(u32, bool)>,
     /// What the volume should be; Soloist starts with its own.
     volume: u16,
+    /// What was last started from here, and whether Soloist has yet to get to it.
+    asked: String,
+    starting: bool,
+    /// What Soloist says it was started with. Autoplay doesn't change it, someone else does.
+    context: String,
+    /// What Spotify would go on with by itself.
+    autoplay: Vec<String>,
 }
 
 fn now_ms() -> u64 {
@@ -363,7 +370,7 @@ impl Player {
         let Some((uri, ms, playing)) = self.resume.take() else { return };
         self.send("activate", json!({})).await;
         if self.sequence.active() {
-            self.send("play", json!({ "uri": uri })).await;
+            self.start(uri).await;
             self.catch_up = Some((ms, playing));
             self.hand_over().await;
         } else {
@@ -396,8 +403,14 @@ impl Player {
     async fn play(&mut self, uri: Option<String>) {
         if let Some(uri) = uri {
             self.send("activate", json!({})).await;
-            self.send("play", json!({ "uri": uri })).await;
+            self.start(uri).await;
         }
+    }
+
+    async fn start(&mut self, uri: String) {
+        self.send("play", json!({ "uri": uri })).await;
+        self.asked = uri;
+        self.starting = true;
     }
 
     async fn hand_over(&mut self) {
@@ -474,6 +487,9 @@ impl Player {
     /// Returns whether the song changed.
     async fn event(&mut self, event: &Value) -> bool {
         let mut changed = false;
+        if let Some(context) = event["context"]["uri"].as_str() {
+            self.context = context.to_owned();
+        }
         match event["type"].as_str().unwrap_or_default() {
             "auth_state" => {
                 let paired = event["logged_in"].as_bool().unwrap_or(false);
@@ -519,6 +535,7 @@ impl Player {
             "error" => {
                 let message = event["message"].as_str().unwrap_or("Soloist refused that");
                 log::warn!("soloist: {message}");
+                self.starting = false;
                 (self.emit)(Event::Status(format!("Soloist: {message}")));
             }
             _ => {}
@@ -527,14 +544,34 @@ impl Player {
     }
 
     async fn item(&mut self, item: &Value) -> bool {
-        let Some(uri) = item["uri"].as_str().filter(|u| !u.is_empty() && *u != self.track) else { return false };
-        match if self.jam.is_some() { Started::Foreign } else { self.sequence.started(uri) } {
-            Started::Skip => {
-                self.send("skip_next", json!({})).await;
+        let Some(uri) = item["uri"].as_str().filter(|u| !u.is_empty()) else { return false };
+        let ours = self.context == self.asked;
+        if ours {
+            self.starting = false;
+        }
+        if uri == self.track {
+            return false;
+        }
+        if self.jam.is_none() {
+            let known = self.sequence.knows(uri);
+            if !known && ours && self.autoplay.iter().any(|a| a == uri) && let Some(next) = self.sequence.ran_out() {
+                log::info!("autoplay came before the list was over");
+                self.play(Some(next)).await;
+                self.hand_over().await;
                 return false;
             }
-            Started::Ours => self.hand_over().await,
-            Started::Foreign => {}
+            // Songs queued elsewhere, and what played before ours starts, don't end the list.
+            let passing = !known && (self.starting || ours && !self.autoplay.iter().any(|a| a == uri));
+            if !passing {
+                match self.sequence.started(uri) {
+                    Started::Skip => {
+                        self.send("skip_next", json!({})).await;
+                        return false;
+                    }
+                    Started::Ours => self.hand_over().await,
+                    Started::Foreign => {}
+                }
+            }
         }
         self.track = uri.to_owned();
         self.position = (0, now_ms());
@@ -586,10 +623,9 @@ impl Player {
 
     /// Returns whether the queue shown has to change.
     fn queue_changed(&mut self, event: &Value) -> bool {
-        let uris: Vec<_> = event["upcoming"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        let upcoming = || event["upcoming"].as_array().into_iter().flatten();
+        self.autoplay = upcoming().filter(|e| e["source"] == "autoplay").filter_map(|e| e["item"]["uri"].as_str()).map(String::from).collect();
+        let uris: Vec<_> = upcoming()
             .filter_map(|e| e["item"]["uri"].as_str())
             .filter(|uri| uri.starts_with("spotify:track:"))
             .map(String::from)
@@ -667,7 +703,7 @@ mod tests {
         let events = Arc::new(Mutex::new(vec![]));
         let log = events.clone();
         let emit: Emit = Arc::new(move |e| log.lock().unwrap().push(e));
-        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2 };
+        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2, asked: String::new(), starting: false, context: String::new(), autoplay: vec![] };
         (player, sent, events)
     }
 
@@ -705,6 +741,45 @@ mod tests {
         assert!(!p.event(&json!({ "type": "track_changed", "item": song("b") })).await);
         assert_eq!(settled(&sent).await, ["skip_next"]);
         assert!(p.event(&json!({ "type": "track_changed", "item": song("y") })).await);
+    }
+
+    fn playing(uri: &str, context: &str) -> Value {
+        json!({ "type": "playback_state", "status": "playing", "item": song(uri), "context": { "uri": context } })
+    }
+
+    #[tokio::test]
+    async fn what_played_before_does_not_end_the_list() {
+        let (mut p, sent, _) = player().await;
+        let first = p.sequence.start(vec!["a".into(), "b".into(), "c".into()], "a");
+        p.play(first).await;
+        p.hand_over().await;
+        // Taking over reports what the phone played, which is neither ours nor a new start.
+        p.event(&playing("old", "phone")).await;
+        p.event(&playing("a", "a")).await;
+        // Queued on the phone, so it goes before ours.
+        p.event(&playing("guest", "a")).await;
+        p.event(&playing("b", "a")).await;
+        assert_eq!(settled(&sent).await, ["activate", "play \"a\"", "add_to_queue \"b\"", "add_to_queue \"c\""]);
+        p.event(&playing("theirs", "phone")).await;
+        assert!(!p.sequence.active(), "now someone else did start something");
+    }
+
+    #[tokio::test]
+    async fn autoplay_waits_until_the_list_is_over() {
+        let (mut p, sent, _) = player().await;
+        let first = p.sequence.start(vec!["a".into(), "b".into()], "a");
+        p.play(first).await;
+        p.hand_over().await;
+        p.event(&playing("a", "a")).await;
+        settled(&sent).await;
+        // What was handed over got lost.
+        p.queue_changed(&json!({ "upcoming": [{ "source": "autoplay", "item": { "uri": "x" } }, { "source": "autoplay", "item": { "uri": "y" } }] }));
+        assert!(!p.event(&playing("x", "a")).await);
+        assert_eq!(settled(&sent).await, ["activate", "play \"b\""]);
+        p.event(&playing("b", "b")).await;
+        assert!(p.event(&playing("y", "b")).await, "nothing left, so autoplay may go on");
+        assert!(!p.sequence.active());
+        assert_eq!(settled(&sent).await, Vec::<String>::new());
     }
 
     #[tokio::test]

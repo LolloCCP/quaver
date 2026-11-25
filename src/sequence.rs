@@ -141,6 +141,21 @@ impl Sequence {
         Started::Foreign
     }
 
+    /// Whether `started` can place a song.
+    pub fn knows(&self, uri: &str) -> bool {
+        let ahead = self.ahead.as_ref().map(|a| a.uri.as_str());
+        self.expected.as_deref() == Some(uri) || ahead == Some(uri) || self.stale.iter().any(|s| s == uri)
+    }
+
+    /// The player ran out of songs, so whatever it was handed is gone. Returns the song to go on with.
+    pub fn ran_out(&mut self) -> Option<String> {
+        self.stale.clear();
+        self.hand_over();
+        let uri = self.ahead.as_ref()?.uri.clone();
+        self.started(&uri);
+        Some(uri)
+    }
+
     /// The player was started anew: it holds nothing of ours any more.
     pub fn player_restarted(&mut self) {
         if let Some(ahead) = self.ahead.take().filter(|a| a.from_queue) {
@@ -356,6 +371,20 @@ mod tests {
         p.play(&mut s, again);
         run(&mut s, &mut p, 4);
         assert_eq!(p.heard, "aaqbc");
+    }
+
+    #[test]
+    fn a_lost_song_is_not_the_end() {
+        let (mut s, mut p) = (Sequence::default(), Player::default());
+        let first = s.start(list("abc"), "a");
+        p.play(&mut s, first);
+        p.queue.clear();
+        assert!(s.knows("a") && s.knows("b") && !s.knows("z"));
+        let next = s.ran_out();
+        p.play(&mut s, next);
+        run(&mut s, &mut p, 1);
+        assert_eq!(p.heard, "abc");
+        assert_eq!(s.ran_out(), None, "the list is over");
     }
 
     #[test]
