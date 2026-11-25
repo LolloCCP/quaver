@@ -28,6 +28,14 @@ lasts 90 days. Soloist is Spotify's software under Spotify's terms; it is not pa
 
 Can't connect? `cargo test probe -- --ignored --nocapture` prints why this network can't reach Spotify.
 
+Through Soloist, Quaver asks for lossless and turns Spotify's loudness normalization off (or on, with "Same volume for
+every song"). That uses undocumented lines of Soloist's settings, which an update may change.
+
+## Offline
+
+Settings > Offline plays the MP3, FLAC and Ogg Vorbis files in a folder of yours, without Spotify, a login or a network;
+the equalizer works there. Songs downloaded in the Spotify app are encrypted for it and can't be played.
+
 ## Your data
 
 Everything is in `%LOCALAPPDATA%\Quaver`: the login in `credentials.json` ("Sign out" deletes it), the Soloist key in

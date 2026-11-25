@@ -5,6 +5,7 @@ mod art;
 mod backend;
 mod eq;
 mod history;
+mod local;
 mod sequence;
 mod settings;
 mod soloist;
@@ -15,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use art::{STYLES, Style};
+use art::{CUSTOM, STYLES, Style};
 use backend::{Cmd, Event};
 use history::{History, Page};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -160,6 +161,21 @@ fn open(target: &std::ffi::OsStr) {
     if let Err(e) = std::process::Command::new("explorer").arg(target).spawn() {
         log::warn!("open: {e}");
     }
+}
+
+/// Asks for a folder with the dialog that comes with Windows.
+fn choose_folder() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const ASK: &str = "Add-Type -AssemblyName System.Windows.Forms; [Console]::OutputEncoding = [Text.Encoding]::UTF8; \
+        $over = New-Object Windows.Forms.Form -Property @{ TopMost = $true }; \
+        $ask = New-Object Windows.Forms.FolderBrowserDialog -Property @{ Description = 'Your music folder' }; \
+        if ($ask.ShowDialog($over) -eq 'OK') { [Console]::Out.Write($ask.SelectedPath) }";
+    let shell = PathBuf::from(std::env::var_os("SystemRoot")?).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let output = std::process::Command::new(shell).args(["-NoProfile", "-STA", "-Command", ASK]).creation_flags(CREATE_NO_WINDOW).output();
+    let folder = output.inspect_err(|e| log::warn!("folder: {e}")).ok()?.stdout;
+    let folder = String::from_utf8(folder).ok()?.trim_start_matches('\u{feff}').to_owned();
+    Some(folder).filter(|f| !f.is_empty())
 }
 
 /// Puts plain text on the clipboard.
@@ -341,6 +357,25 @@ impl Ui {
         self.app.set_soloist_has_key(std::fs::metadata(soloist::Setup::key_file(&self.data_dir)).is_ok_and(|f| f.len() > 0));
     }
 
+    /// Changes between Spotify and the music folder, and forgets what was shown from the other.
+    fn set_offline(&mut self, on: bool) {
+        self.change_settings(|s| s.offline = on);
+        self.rows.set_vec(vec![]);
+        self.playlists.set_vec(vec![]);
+        self.tiles.set_vec(vec![]);
+        self.shelves.clear();
+        self.track_uri.clear();
+        let app = &self.app;
+        app.set_shelves(Default::default());
+        app.set_home_note("".into());
+        app.set_list_title("".into());
+        app.set_list_context("".into());
+        app.set_track_title("".into());
+        app.set_now_playing(false);
+        app.set_home_open(true);
+        let _ = self.tx.send(Cmd::Restart);
+    }
+
     fn save_soloist_key(&mut self, key: &str) {
         match std::fs::write(soloist::Setup::key_file(&self.data_dir), key) {
             Ok(()) => {
@@ -369,7 +404,12 @@ impl Ui {
         app.set_tray(s.tray);
         app.global::<Theme>().set_motion(s.motion);
         app.set_soloist(s.soloist);
+        app.set_offline(s.offline);
+        app.set_music(s.music.as_str().into());
         app.global::<Theme>().set_tint(s.tint);
+        let [base, highlight] = s.custom.map(color);
+        app.global::<Custom>().set_base(base);
+        app.global::<Custom>().set_highlight(highlight);
         // Replacing the model would drop the slider that is being dragged.
         let bands = app.get_eq();
         for (i, gain) in s.eq.iter().enumerate() {
@@ -379,12 +419,17 @@ impl Ui {
         }
     }
 
-    fn set_look(&mut self, look: art::Look) {
+    fn set_look(&mut self, look: art::Look, fade: bool) {
         self.scene.backdrop = look.backdrop;
         self.scene.palette = look.palette;
-        self.new_look = true;
+        self.new_look |= fade;
         self.repaint_soon();
-        self.fade_to(look.palette);
+        if fade {
+            self.fade_to(look.palette);
+        } else {
+            self.fade.stop();
+            self.show_palette(look.palette);
+        }
         self.title_bar = look.edge;
         self.tint_title_bar();
     }
@@ -392,8 +437,7 @@ impl Ui {
     /// The parts of a theme that aren't colors.
     fn show_style(&self) {
         let (theme, style) = (self.app.global::<Theme>(), self.scene.style);
-        let [r, g, b] = style.over();
-        theme.set_over(slint::Color::from_rgb_u8(r, g, b));
+        theme.set_over(color(style.over()));
         theme.set_bright(style.bright);
         theme.set_gloss(style.gloss);
         theme.set_pointer_light(style.glow);
@@ -401,24 +445,47 @@ impl Ui {
         self.app.set_glass_theme(style.id == STYLES[0].id);
     }
 
-    fn set_style(&mut self, style: &'static Style) {
+    fn set_style(&mut self, style: Style) {
         self.scene.style = style;
         self.show_style();
-        self.set_look(art::look(self.cover.as_ref(), style));
+        self.set_look(art::look(self.cover.as_ref(), &style), true);
         // Gloss is painted into the pictures.
         self.redraw_pictures();
     }
 
-    /// Pictures of every theme in the colors of the current cover.
-    fn show_themes(&self) {
+    /// Changes one of the custom theme's colors. A dragged picker does this many times a
+    /// second, so nothing fades.
+    fn set_custom(&mut self, which: i32, picked: [u8; 3]) {
+        let Some(old) = self.shared.lock().custom.get(which as usize).copied() else { return };
+        if old == picked {
+            return;
+        }
+        self.change_settings(|s| s.custom[which as usize] = picked);
+        let custom = self.shared.lock().custom;
+        let style = Style::by_id(CUSTOM, custom);
+        self.app.get_themes().set_row_data(STYLES.len(), self.theme_card(&style));
+        if self.scene.style.id == CUSTOM {
+            self.scene.style = style;
+            self.show_style();
+            self.set_look(art::look(self.cover.as_ref(), &style), false);
+        }
+    }
+
+    /// A picture of a theme in the colors of the current cover.
+    fn theme_card(&self, style: &Style) -> ThemeCard {
         let scale = self.app.window().scale_factor();
         let size = ((176. * scale) as u32, (103. * scale) as u32);
         let tint = self.shared.lock().tint;
-        let themes = STYLES.iter().map(|style| ThemeCard {
+        ThemeCard {
             id: style.id.into(),
             name: style.name.into(),
             preview: slint::Image::from_rgb8(art::preview(self.cover.as_ref(), style, tint, size)),
-        });
+        }
+    }
+
+    fn show_themes(&self) {
+        let custom = self.shared.lock().custom;
+        let themes = Style::all(custom).map(|style| self.theme_card(&style));
         self.app.set_themes(ModelRc::new(VecModel::from(themes.collect::<Vec<_>>())));
     }
 
@@ -502,7 +569,6 @@ impl Ui {
     fn show_palette(&mut self, p: art::Palette) {
         self.palette = p;
         let theme = self.app.global::<Theme>();
-        let color = |[r, g, b]: [u8; 3]| slint::Color::from_rgb_u8(r, g, b);
         theme.set_accent(color(p.accent));
         theme.set_fill(color(p.fill));
         theme.set_fill2(color(p.fill2));
@@ -675,7 +741,7 @@ impl Ui {
                 Ok(image) => {
                     if let Some(pixels) = image.to_rgba8() {
                         app.set_has_cover(true);
-                        self.set_look(art::look(Some(&pixels), self.scene.style));
+                        self.set_look(art::look(Some(&pixels), &self.scene.style), true);
                         self.cover = Some(pixels);
                         self.show_cover();
                     }
@@ -716,6 +782,10 @@ impl Ui {
 
 fn card(c: backend::Card, kind: i32) -> Card {
     Card { title: c.title.into(), subtitle: c.subtitle.into(), uri: c.uri.into(), picture_id: c.picture.into(), kind, ..Default::default() }
+}
+
+fn color([r, g, b]: [u8; 3]) -> slint::Color {
+    slint::Color::from_rgb_u8(r, g, b)
 }
 
 fn greeting(hour: u16) -> &'static str {
@@ -1004,7 +1074,11 @@ fn main() -> Result<(), slint::PlatformError> {
         }};
     }
     send!(app.on_connect() Cmd::Connect);
-    send!(app.on_logout() Cmd::Logout);
+    app.on_logout(|| with_ui(|ui| {
+        // Signing in is what comes next, also when offline.
+        ui.change_settings(|s| s.offline = false);
+        let _ = ui.tx.send(Cmd::Logout);
+    }));
     let history = Rc::new(RefCell::new(History::default()));
     // Every page is opened by one of these four, also when going back to it.
     let visit = {
@@ -1235,6 +1309,18 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.change_settings(|s| s.soloist = on);
         let _ = ui.tx.send(Cmd::Restart);
     }));
+    app.on_set_offline(|on| with_ui(|ui| ui.set_offline(on)));
+    app.on_choose_music(|| {
+        std::thread::spawn(|| {
+            let Some(folder) = choose_folder() else { return };
+            let _ = slint::invoke_from_event_loop(move || with_ui(|ui| {
+                ui.change_settings(|s| s.music = folder);
+                if ui.shared.lock().offline {
+                    let _ = ui.tx.send(Cmd::Restart);
+                }
+            }));
+        });
+    });
     app.on_soloist_key(|key| with_ui(|ui| ui.save_soloist_key(key.trim())));
     app.on_soloist_folder(|| with_ui(|ui| {
         let dir = soloist::Setup::dir(&ui.data_dir);
@@ -1277,10 +1363,19 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }));
     app.on_set_theme_id(|id| with_ui(|ui| {
-        let style = Style::by_id(&id);
+        let custom = ui.shared.lock().custom;
+        let style = Style::by_id(&id, custom);
         ui.change_settings(|s| s.theme = style.id.into());
         ui.set_style(style);
     }));
+    let custom = app.global::<Custom>();
+    custom.on_hex(|c| settings::hex([c.red(), c.green(), c.blue()]).into());
+    custom.on_picked(|which, c| with_ui(|ui| ui.set_custom(which, [c.red(), c.green(), c.blue()])));
+    custom.on_typed(|which, text| {
+        if let Some(color) = settings::parse_hex(&text) {
+            with_ui(|ui| ui.set_custom(which, color));
+        }
+    });
     app.on_settings_shown(|| {
         let _ = slint::invoke_from_event_loop(|| with_ui(|ui| {
             ui.show_themes();
@@ -1324,8 +1419,8 @@ fn main() -> Result<(), slint::PlatformError> {
     app.show()?;
     tray.show()?;
     when_window_exists(tx.clone());
-    let style = Style::by_id(&settings.theme);
-    let look = art::look(None, style);
+    let style = Style::by_id(&settings.theme, settings.custom);
+    let look = art::look(None, &style);
     let mut ui = Ui {
         app,
         tray,
@@ -1362,7 +1457,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.show_settings(&settings);
     ui.show_style();
     ui.show_palette(look.palette);
-    ui.set_look(look);
+    ui.set_look(look, true);
     UI.set(Some(ui));
 
     std::thread::spawn(move || {

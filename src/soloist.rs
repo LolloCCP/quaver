@@ -28,11 +28,11 @@ use crate::{
 
 const QUEUE_SHOWN: usize = 80;
 /// How often to look whether Windows plays somewhere else now.
-const OUTPUT_CHECK: Duration = Duration::from_secs(2);
+pub const OUTPUT_CHECK: Duration = Duration::from_secs(2);
 /// How often to look for a Jam.
 const JAM_CHECK: Duration = Duration::from_secs(15);
 /// Pressing "previous" later than this into a song restarts it.
-const RESTART_AFTER_MS: u32 = 3000;
+pub const RESTART_AFTER_MS: u32 = 3000;
 
 pub struct Setup {
     pub exe: PathBuf,
@@ -100,7 +100,7 @@ fn run_tool(program: &str, options: &[&str], rest: &[&std::ffi::OsStr]) -> Resul
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The name of what Windows plays through, such as the earbuds that were just connected.
-fn output() -> Option<String> {
+pub fn output() -> Option<String> {
     cpal::default_host().default_output_device()?.name().ok()
 }
 
@@ -156,9 +156,45 @@ fn port_of(netstat: &str, pid: u32) -> Option<u16> {
     })
 }
 
-async fn launch(setup: &Setup, data_dir: &Path) -> Result<(Child, Socket), Error> {
+/// Makes Soloist ask for lossless, and for even volume only if that is wanted. Nothing documented
+/// does that, but these are lines of its own settings, which it reads when it starts.
+// shortcut: an account has no such file before its first sign-in, so that first time plays
+// untuned; start Soloist again after pairing if that matters.
+fn tune(state: &Path, normalise: bool) -> std::io::Result<()> {
+    let Ok(users) = std::fs::read_dir(state.join("settings").join("Users")) else { return Ok(()) };
+    for user in users.flatten() {
+        let path = user.path().join("prefs");
+        let Ok(old) = std::fs::read_to_string(&path) else { continue };
+        let tuned = tuned(&old, normalise);
+        if tuned != old {
+            let new = path.with_extension("new");
+            std::fs::write(&new, tuned)?;
+            std::fs::rename(new, path)?;
+        }
+    }
+    Ok(())
+}
+
+fn tuned(prefs: &str, normalise: bool) -> String {
+    const LOSSLESS: &str = "5";
+    let wanted = [
+        ("audio.play_bitrate_enumeration", LOSSLESS),
+        ("audio.play_bitrate_non_metered_enumeration", LOSSLESS),
+        ("audio.play_bitrate_non_metered_migrated", "true"),
+        ("audio.normalize_v2", if normalise { "true" } else { "false" }),
+    ];
+    let key = |line: &str| line.split('=').next().unwrap_or_default().to_owned();
+    let kept = prefs.lines().filter(|l| !l.is_empty() && !wanted.iter().any(|w| w.0 == key(l))).map(String::from);
+    kept.chain(wanted.map(|(key, value)| format!("{key}={value}"))).map(|l| l + "\n").collect()
+}
+
+async fn launch(setup: &Setup, data_dir: &Path, normalise: bool) -> Result<(Child, Socket), Error> {
     let state = data_dir.join("soloist-state");
     std::fs::create_dir_all(&state)?;
+    // Worse sound is better than none.
+    if let Err(e) = tune(&state, normalise) {
+        log::warn!("soloist settings: {e}");
+    }
     let port_file = state.join("ws.port");
     // Left behind if Soloist was killed; it would point at a port that is gone.
     let _ = std::fs::remove_file(&port_file);
@@ -199,10 +235,11 @@ pub async fn run(
     cache: &Cache,
     setup: &Setup,
     data_dir: &Path,
+    normalise: bool,
 ) -> Result<End, Error> {
     let mut playing_on = tokio::task::spawn_blocking(output).await.ok().flatten();
     let (mut child, socket) = {
-        let starting = launch(setup, data_dir);
+        let starting = launch(setup, data_dir, normalise);
         tokio::pin!(starting);
         loop {
             tokio::select! {
@@ -241,7 +278,7 @@ pub async fn run(
                 if let Err(e) = child.kill().await {
                     log::warn!("soloist: {e}");
                 }
-                let (new_child, socket) = launch(setup, data_dir).await?;
+                let (new_child, socket) = launch(setup, data_dir, normalise).await?;
                 (child, player.socket) = (new_child, socket);
                 player.paired = None;
             }
@@ -889,8 +926,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("quaver-launch-{}", std::process::id()));
         // Any program that doesn't know these options ends with an error.
         let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32").join("where.exe");
-        let failed = launch(&Setup { exe, key: "k".into() }, &dir).await.err().expect("must fail");
+        let failed = launch(&Setup { exe, key: "k".into() }, &dir, false).await.err().expect("must fail");
         assert!(failed.to_string().contains("API key"), "{failed}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn its_settings_are_tuned_and_the_rest_kept() {
+        let dir = std::env::temp_dir().join(format!("quaver-tune-{}", std::process::id()));
+        tune(&dir, false).unwrap();
+        let user = dir.join("settings").join("Users").join("someone-user");
+        std::fs::create_dir_all(user.with_file_name("new-user")).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        let prefs = user.join("prefs");
+        std::fs::write(&prefs, "audio.gapless_migrated_to_ps=true\r\naudio.play_bitrate_enumeration=2\r\n").unwrap();
+        for normalise in [true, false] {
+            tune(&dir, normalise).unwrap();
+            let now = std::fs::read_to_string(&prefs).unwrap();
+            assert!(now.starts_with("audio.gapless_migrated_to_ps=true\naudio.play_bitrate_enumeration=5\n"), "{now}");
+            assert!(now.ends_with(&format!("audio.normalize_v2={normalise}\n")), "{now}");
+            assert_eq!(tuned(&now, normalise), now);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

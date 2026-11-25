@@ -4682,11 +4682,13 @@ dependencies = [
  "protobuf-json-mapping",
  "rand 0.9.5",
  "raw-window-handle",
+ "rodio",
  "serde_json",
  "slint",
  "slint-build",
  "socket2",
  "souvlaki",
+ "symphonia",
  "tokio",
  "tokio-tungstenite",
 ]
@@ -4997,6 +4999,7 @@ dependencies = [
  "cpal",
  "dasp_sample",
  "num-rational",
+ "symphonia",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ pub type Pixels = SharedPixelBuffer<Rgba8Pixel>;
 type Rgb = [f32; 3];
 
 /// A theme: what the cover's colors are turned into, and how panels look.
+#[derive(Clone, Copy)]
 pub struct Style {
     pub id: &'static str,
     pub name: &'static str,
@@ -22,6 +23,7 @@ pub struct Style {
     colors: Option<[Rgb; 2]>,
 }
 
+#[derive(Clone, Copy)]
 enum Base {
     Cover,
     /// The cover's colors, washed out almost to white.
@@ -29,6 +31,7 @@ enum Base {
     Solid(Rgb),
 }
 
+#[derive(Clone, Copy)]
 enum Surface {
     Glass,
     /// A plain color, how much of it covers what is behind, and how visible its outline is.
@@ -47,9 +50,24 @@ pub const STYLES: [Style; 7] = [
     Style { id: "mist", name: "Mist", bright: true, base: Base::Pastel, surface: Surface::Flat([255.; 3], 0.6, 0.12), radius: 22., gloss: 0.4, glow: false, colors: None },
 ];
 
+pub const CUSTOM: &str = "custom";
+
 impl Style {
-    pub fn by_id(id: &str) -> &'static Style {
-        STYLES.iter().find(|s| s.id == id).unwrap_or(&STYLES[0])
+    /// The themes, with the one made of the person's own background and highlight last.
+    pub fn all(custom: [[u8; 3]; 2]) -> impl Iterator<Item = Style> {
+        STYLES.into_iter().chain([Style::custom(custom)])
+    }
+
+    pub fn by_id(id: &str, custom: [[u8; 3]; 2]) -> Style {
+        Style::all(custom).find(|s| s.id == id).unwrap_or(STYLES[0])
+    }
+
+    fn custom(colors: [[u8; 3]; 2]) -> Style {
+        let [base, highlight] = colors.map(|c| c.map(f32::from));
+        let bright = takes_black(colors[0]);
+        // Panels move away from the text's color, so it reads at least as well on them.
+        let panel = mix(base, [if bright { 255. } else { 0. }; 3], 0.25).map(f32::floor);
+        Style { id: CUSTOM, name: "Custom", bright, base: Base::Solid(base), surface: Surface::Flat(panel, 1., 0.14), radius: 16., gloss: 0., glow: false, colors: Some([highlight; 2]) }
     }
 
     /// What lies over a surface to make something stand out: white on dark, black on light.
@@ -187,7 +205,29 @@ fn blend(cells: &[Rgb], x: f32, y: f32) -> Rgb {
     })
 }
 
+/// Uses the colors as they were picked; only text in them is moved as far as reading needs.
+fn custom_palette(base: Rgb, panel: Rgb, highlight: Rgb, style: &Style) -> Palette {
+    let text = if style.bright { [0.; 3] } else { [255.; 3] };
+    let backs = [base, panel, mix(panel, text, 0.08)].map(|c| luminance(bytes(c)));
+    let readable = |color: Rgb| {
+        let steps = (0..=20).map(|i| mix(color, text, i as f32 / 20.));
+        bytes(steps.into_iter().find(|c| backs.iter().all(|b| contrast(luminance(bytes(*c)), *b) >= 4.5)).unwrap_or(text))
+    };
+    Palette {
+        accent: readable(highlight),
+        fill: bytes(highlight),
+        fill2: bytes(highlight),
+        ink: if takes_black(bytes(highlight)) { [0; 3] } else { [255; 3] },
+        tint: bytes(panel),
+        text: bytes(text),
+        dim: readable(mix(text, base, 0.35)),
+    }
+}
+
 fn palette(cells: &[Rgb], style: &Style) -> Palette {
+    if let (CUSTOM, Base::Solid(base), Surface::Flat(panel, ..), Some([highlight, _])) = (style.id, style.base, style.surface, style.colors) {
+        return custom_palette(base, panel, highlight, style);
+    }
     let spread = |c: &Rgb| c.iter().fold(0f32, |m, v| m.max(*v)) - c.iter().fold(255f32, |m, v| m.min(*v));
     let distance = |a: &Rgb, b: &Rgb| (0..3).map(|c| (a[c] - b[c]).powi(2)).sum::<f32>();
     let full = |c: Rgb| {
@@ -205,7 +245,6 @@ fn palette(cells: &[Rgb], style: &Style) -> Palette {
     let [main, second] = style.colors.unwrap_or([main, second]);
     let accent = if style.bright { darken(main, 0.075) } else { lighten(main, 0.6) };
     let fill = lighten(main, 0.3);
-    let mix = |a: Rgb, b: Rgb, t: f32| -> Rgb { std::array::from_fn(|c| a[c] + (b[c] - a[c]) * t) };
     let mean: Rgb = std::array::from_fn(|c| cells.iter().map(|v| v[c]).sum::<f32>() / cells.len() as f32);
     let mut tint = mix(mean, main, 0.4);
     while luminance(bytes(tint)) > 0.008 {
@@ -228,6 +267,20 @@ fn palette(cells: &[Rgb], style: &Style) -> Palette {
 
 fn bytes(color: Rgb) -> [u8; 3] {
     color.map(|v| v as u8)
+}
+
+fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+    std::array::from_fn(|c| a[c] + (b[c] - a[c]) * t)
+}
+
+/// WCAG contrast of two luminances.
+fn contrast(a: f32, b: f32) -> f32 {
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Whether black text reads better on a color than white text.
+fn takes_black(color: [u8; 3]) -> bool {
+    contrast(luminance(color), 0.) >= contrast(luminance(color), 1.)
 }
 
 /// Mixes in white until the color is bright enough.
@@ -260,7 +313,7 @@ fn luminance(color: [u8; 3]) -> f32 {
 pub struct Scene {
     pub backdrop: Pixels,
     pub palette: Palette,
-    pub style: &'static Style,
+    pub style: Style,
     /// How much of the palette's tint is in the glass.
     pub tint: f32,
     /// Physical size of the window, and physical pixels per logical one.
@@ -425,12 +478,12 @@ impl Scene {
 }
 
 /// A small picture of the app in a style, for the theme picker.
-pub fn preview(cover: Option<&Pixels>, style: &'static Style, tint: f32, size: (u32, u32)) -> SharedPixelBuffer<Rgb8Pixel> {
+pub fn preview(cover: Option<&Pixels>, style: &Style, tint: f32, size: (u32, u32)) -> SharedPixelBuffer<Rgb8Pixel> {
     let Look { backdrop, palette, .. } = look(cover, style);
     let scale = size.0 as f32 / 320.;
     let panel = |x, y, width, height| Panel { x, y, width, height };
     let panels = vec![panel(12., 12., 74., 118.), panel(98., 12., 210., 118.), panel(12., 142., 296., 34.)];
-    let scene = Scene { backdrop, palette, style, tint, size, scale, panels };
+    let scene = Scene { backdrop, palette, style: *style, tint, size, scale, panels };
     let mut out = scene.paint();
     // A few strokes standing for text and buttons.
     let marks = [(24., 30., 48., palette.text), (24., 48., 40., palette.dim), (24., 64., 44., palette.dim),
@@ -549,7 +602,7 @@ mod tests {
                     let scene = Scene {
                         backdrop: backdrop.clone(),
                         palette: p,
-                        style,
+                        style: *style,
                         tint: crate::settings::MIN_TINT,
                         size: (90, 90),
                         scale: 1.,
@@ -566,7 +619,6 @@ mod tests {
                         }))
                     }).fold(if style.bright { 1. } else { 0. }, worst);
                     let bare = backdrop.as_slice().iter().map(|p| luminance([p.r, p.g, p.b])).fold(if style.bright { 1. } else { 0. }, worst);
-                    let contrast = |a: f32, b: f32| (a.max(b) + 0.05) / (a.min(b) + 0.05);
                     for (name, color) in [("accent", p.accent), ("text", p.text), ("dim", p.dim)] {
                         for (place, back) in [("backdrop", bare), ("glass", glass)] {
                             let c = contrast(luminance(color), back);
@@ -584,6 +636,30 @@ mod tests {
     }
 
     #[test]
+    fn any_custom_colors_keep_text_readable() {
+        let steps = [0u8, 51, 102, 117, 120, 153, 204, 255];
+        let colors: Vec<[u8; 3]> = steps.iter().flat_map(|r| steps.iter().flat_map(move |g| steps.map(|b| [*r, *g, b]))).collect();
+        for base in &colors {
+            for highlight in colors.iter().step_by(13) {
+                let style = Style::custom([*base, *highlight]);
+                let p = palette(&default_cells(), &style);
+                assert_eq!((p.fill, p.text), (*highlight, if style.bright { [0; 3] } else { [255; 3] }));
+                let selected = std::array::from_fn(|c| (p.tint[c] as f32 + (style.over()[c] as f32 - p.tint[c] as f32) * 0.08) as u8);
+                for back in [*base, p.tint, selected] {
+                    for (name, color) in [("accent", p.accent), ("text", p.text), ("dim", p.dim)] {
+                        let c = contrast(luminance(color), luminance(back));
+                        assert!(c >= 4.5, "{name} on {back:?} with {base:?} {highlight:?}: {c}");
+                    }
+                }
+                assert!(contrast(luminance(p.ink), luminance(p.fill)) >= 4.5, "ink on {highlight:?}");
+            }
+        }
+        assert_eq!(look(None, &Style::custom([[9, 99, 199], [255; 3]])).edge, [9, 99, 199]);
+        let bright = |color| Style::custom([color, [255, 0, 0]]).bright;
+        assert!(bright([255, 255, 255]) && bright([250, 220, 120]) && !bright([20, 30, 60]) && !bright([0, 0, 0]));
+    }
+
+    #[test]
     fn two_colored_covers_give_two_colors() {
         let mut cover = solid(220, 30, 40, 16, 16);
         cover.make_mut_slice()[128..].fill(Rgba8Pixel { r: 20, g: 60, b: 230, a: 255 });
@@ -595,7 +671,7 @@ mod tests {
     fn scene(size: (u32, u32), scale: f32, panels: Vec<Panel>) -> Scene {
         let Look { backdrop, mut palette, .. } = look(Some(&solid(120, 120, 120, 8, 8)), &STYLES[0]);
         (palette.fill, palette.fill2) = ([255, 0, 0], [0, 0, 255]);
-        Scene { backdrop, palette, style: &STYLES[0], tint: 0.5, size, scale, panels }
+        Scene { backdrop, palette, style: STYLES[0], tint: 0.5, size, scale, panels }
     }
 
     #[test]
@@ -609,13 +685,14 @@ mod tests {
     #[test]
     fn every_theme_has_its_own_look_and_preview() {
         let mut seen = Vec::new();
-        for style in &STYLES {
-            assert_eq!(Style::by_id(style.id).name, style.name);
+        let custom = [[30, 34, 54], [255, 150, 80]];
+        for style in &Style::all(custom).collect::<Vec<_>>() {
+            assert_eq!(Style::by_id(style.id, custom).name, style.name);
             let preview = preview(None, style, 0.5, (160, 94));
             assert!(!seen.contains(&preview.as_slice().to_vec()), "{style:?} looks like another");
             seen.push(preview.as_slice().to_vec());
         }
-        assert_eq!(Style::by_id("removed theme").id, "glass");
+        assert_eq!(Style::by_id("removed theme", custom).id, "glass");
         preview(None, &STYLES[0], 0.5, (1, 1));
     }
 

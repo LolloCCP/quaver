@@ -18,15 +18,20 @@ pub struct Settings {
     /// Animations, the pointer's light and gliding scrolling.
     pub motion: bool,
     pub theme: String,
+    /// The custom theme's background and highlight.
+    pub custom: [[u8; 3]; 2],
     /// Play through Spotify Soloist instead of librespot.
     pub soloist: bool,
+    /// Play the files in `music`, without Spotify.
+    pub offline: bool,
+    pub music: String,
     pub eq_on: bool,
     pub eq: [f32; BANDS],
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), soloist: false, eq_on: false, eq: [0.; BANDS] }
+        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS] }
     }
 }
 
@@ -44,9 +49,10 @@ impl Settings {
     }
 
     fn text(&self) -> String {
-        let Self { bitrate, normalise, tray, tint, motion, theme, soloist, eq_on, eq } = self;
+        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq } = self;
+        let custom = custom.map(hex).join(",");
         let eq = eq.map(|g| g.to_string()).join(",");
-        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\nsoloist={soloist}\neq_on={eq_on}\neq={eq}\n")
+        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\n")
     }
 
     fn parse(text: &str) -> Self {
@@ -60,7 +66,13 @@ impl Settings {
                 "motion" => s.motion = flag(s.motion),
                 // An unknown theme is shown as the first one.
                 "theme" => s.theme = value.trim().to_owned(),
+                "custom" => {
+                    let colors: Vec<_> = value.split(',').filter_map(parse_hex).collect();
+                    s.custom = colors.try_into().unwrap_or(s.custom);
+                }
                 "soloist" => s.soloist = flag(s.soloist),
+                "offline" => s.offline = flag(s.offline),
+                "music" => s.music = value.to_owned(),
                 "eq_on" => s.eq_on = flag(s.eq_on),
                 "tint" => s.tint = value.parse().ok().filter(|t: &f32| t.is_finite()).unwrap_or(s.tint).clamp(MIN_TINT, 0.85),
                 "eq" => {
@@ -74,6 +86,22 @@ impl Settings {
         }
         s
     }
+}
+
+fn music_folder() -> String {
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    format!(r"{home}\Music")
+}
+
+pub fn hex([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let digits = text.trim().trim_start_matches('#');
+    let valid = digits.len() == 6 && digits.bytes().all(|b| b.is_ascii_hexdigit());
+    let [_, r, g, b] = u32::from_str_radix(digits, 16).ok().filter(|_| valid)?.to_be_bytes();
+    Some([r, g, b])
 }
 
 /// Settings as seen by the UI, the connection and the audio thread.
@@ -99,15 +127,19 @@ mod tests {
 
     #[test]
     fn what_is_saved_is_what_loads() {
-        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), soloist: true, eq_on: true, ..Default::default() };
+        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, ..Default::default() };
         s.eq[3] = -4.5;
         assert_eq!(Settings::parse(&s.text()), s);
     }
 
     #[test]
     fn damaged_files_fall_back_to_defaults() {
-        let text = "bitrate=9999\ntint=NaN\ntray=perhaps\neq=1,2,3\nunknown=1\nnonsense";
+        let text = "bitrate=9999\ntint=NaN\ntray=perhaps\ncustom=#12345g,#ffffff\neq=1,2,3\nunknown=1\nnonsense";
         assert_eq!(Settings::parse(text), Settings::default());
+        assert_eq!(parse_hex(" 0A0b0C "), Some([10, 11, 12]));
+        for bad in ["", "#", "#fff", "+12345", "#1234567", "ééé"] {
+            assert_eq!(parse_hex(bad), None, "{bad}");
+        }
         assert_eq!(Settings::parse("eq=99,0,0,0,0,0,0,0,0,-99").eq[0], MAX_GAIN);
     }
 }

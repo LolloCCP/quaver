@@ -1,7 +1,7 @@
 import { ScrollView, AboutSlint } from "std-widgets.slint";
 export struct ThemeCard { id: string, name: string, preview: image }
 
-import { Theme, Scene, Glass, PointerLight, KeyFocus, Icon, Pill, Switch, Bar, EqBand, SecretBox, Link, Cover, Transport, Timeline } from "glass.slint";
+import { Theme, Scene, Glass, PointerLight, KeyFocus, Icon, Pill, Switch, Bar, EqBand, Custom, ColorPicker, SecretBox, Link, Cover, Transport, Timeline } from "glass.slint";
 
 export struct TrackRow { uri: string, title: string, artist: string, artist-uri: string, album: string, album-uri: string, duration: string, cover-id: string, cover: image, has-cover: bool }
 
@@ -337,6 +337,10 @@ export component SettingsView inherits ScrollView {
     in property <bool> glass-theme;
     callback set-theme-id(string);
     callback soloist-about();
+    in property <bool> offline;
+    in property <string> music;
+    callback set-offline(bool);
+    callback choose-music();
     callback discord();
     in property <string> player-note;
     callback set-soloist(bool);
@@ -395,6 +399,11 @@ export component SettingsView inherits ScrollView {
                 VerticalLayout { alignment: center; Bar { width: 180px; live: true; label: "Glass darkness"; value: (Theme.tint - 0.4) / 0.45; commit(v) => { root.set-tint(0.4 + v * 0.45); } } }
                 Text { text: "Dark"; color: Theme.dim; font-size: 12px; vertical-alignment: center; }
             }
+            if root.theme == "custom": HorizontalLayout {
+                spacing: 24px;
+                ColorPicker { horizontal-stretch: 1; label: "Theme"; color: Custom.base; picked(c) => { Custom.picked(0, c); } typed(t) => { Custom.typed(0, t); } }
+                ColorPicker { horizontal-stretch: 1; label: "Highlights"; color: Custom.highlight; picked(c) => { Custom.picked(1, c); } typed(t) => { Custom.typed(1, t); } }
+            }
             Switch { text: "Motion effects"; note: "Animations, pointer light and gliding scrolling"; checked: Theme.motion; toggled(on) => { root.set-motion(on); } }
         }
         Section {
@@ -405,7 +414,7 @@ export component SettingsView inherits ScrollView {
                 Pill { quiet: true; text: "Built-in"; selected: !root.soloist; clicked => { if (root.soloist) { root.set-soloist(false); } } }
                 Pill { quiet: true; text: "Spotify Soloist"; selected: root.soloist; clicked => { root.set-soloist(true); } }
             }
-            Text { text: root.soloist ? "Spotify's own player makes the sound. The equalizer, streaming quality and volume settings below don't reach it." : "If songs are refused, Spotify doesn't allow the built-in player on your account. Soloist is Spotify's own player and works there."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+            Text { text: root.soloist ? "Spotify's own player makes the sound, lossless where Spotify has it. The equalizer and streaming quality below don't reach it." : "If songs are refused, Spotify doesn't allow the built-in player on your account. Soloist is Spotify's own player and works there."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
             Text { text: "Set up Soloist"; color: Theme.text; font-weight: 600; }
             HorizontalLayout {
                 spacing: 10px;
@@ -427,6 +436,16 @@ export component SettingsView inherits ScrollView {
                 Text { text: "In the Spotify app on this network, pick “Quaver” as the device, once. Allow it if Windows Firewall asks."; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
             }
             if root.player-note != "": Text { text: root.player-note; color: Theme.accent; wrap: word-wrap; }
+        }
+        Section {
+            text: "Offline";
+            Switch { text: "Offline mode"; note: "Plays only the files in your music folder, without Spotify"; checked: root.offline; toggled(on) => { root.set-offline(on); } }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: root.music; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+                VerticalLayout { alignment: center; Pill { quiet: true; text: "Choose folder"; clicked => { root.choose-music(); } } }
+            }
+            Text { text: "MP3, FLAC and Ogg Vorbis. Songs downloaded in the Spotify app are locked to it, so they can't be played here."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
         }
         Section {
             text: "Equalizer";

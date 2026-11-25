@@ -1,9 +1,9 @@
 import { ListView } from "std-widgets.slint";
-import { Theme, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
+import { Theme, Custom, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
 import { Card, Shelf, HomeView, LibraryItem } from "home.slint";
 import { ThemeCard, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
 
-export { Theme, Scene, ThemeCard, TrackRow, Card, Shelf }
+export { Theme, Custom, Scene, ThemeCard, TrackRow, Card, Shelf }
 
 export component App inherits Window {
     title: root.track-title == "" ? "Quaver" : root.track-title + " · " + root.track-artist;
@@ -78,6 +78,10 @@ export component App inherits Window {
     callback soloist-download();
     callback soloist-get-key();
     callback soloist-about();
+    in property <bool> offline;
+    in property <string> music;
+    callback set-offline(bool);
+    callback choose-music();
     callback discord();
     // Who is in the current Jam; nobody when there is none.
     in property <[string]> jam;
@@ -255,6 +259,10 @@ export component App inherits Window {
                             alignment: center;
                             Pill { text: root.need-login ? "Sign in with Spotify" : "Try again now"; clicked => { root.connect(); } }
                         }
+                        if !root.busy: HorizontalLayout {
+                            alignment: center;
+                            Pill { quiet: true; text: "Play my own files"; clicked => { root.set-offline(true); } }
+                        }
                     }
                 }
             }
@@ -340,8 +348,8 @@ export component App inherits Window {
                             Text { text: "Your library"; color: Theme.text; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
                         }
                         LibraryItem {
-                            card: { title: "Liked Songs", subtitle: "Your favorites", uri: "liked", picture-id: "", kind: 0 };
-                            selected: root.list-shown && root.list-title == "Liked Songs";
+                            card: { title: root.offline ? "My files" : "Liked Songs", subtitle: root.offline ? "Every song" : "Your favorites", uri: "liked", picture-id: "", kind: 0 };
+                            selected: root.list-shown && root.list-title == (root.offline ? "My files" : "Liked Songs");
                             clicked => { root.show-list("liked", ""); root.liked(); }
                         }
                         ListView {
@@ -432,6 +440,10 @@ export component App inherits Window {
                                 soloist-folder => { root.soloist-folder(); }
                                 soloist-download => { root.soloist-download(); }
                                 soloist-get-key => { root.soloist-get-key(); }
+                                offline: root.offline;
+                                music: root.music;
+                                set-offline(v) => { root.set-offline(v); }
+                                choose-music => { root.choose-music(); }
                                 soloist-about => { root.soloist-about(); }
                                 soloist-here: root.soloist-here;
                                 soloist-has-key: root.soloist-has-key;
@@ -578,7 +590,7 @@ export component App inherits Window {
                 width: 340px;
                 height: jam-box.preferred-height;
                 border-radius: 18px;
-                background: Theme.bright ? #fcfaf6 : #17171d;
+                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
                 border-width: 1px;
                 border-color: Theme.hover-line;
                 TouchArea { }
@@ -604,7 +616,7 @@ export component App inherits Window {
             width: min(root.width - 80px, toast-text.preferred-width + 48px);
             height: max(46px, toast-text.preferred-height + 22px);
             border-radius: 23px;
-            background: Theme.bright ? #fffffff5 : #16161cf5;
+            background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fffffff5 : #16161cf5;
             border-width: 1px;
             border-color: Theme.hover-line;
             accessible-role: text;
@@ -628,7 +640,7 @@ export component App inherits Window {
                 width: min(560px, root.width - 64px);
                 height: dialog.preferred-height;
                 border-radius: 24px;
-                background: Theme.bright ? #fcfaf6 : #17171d;
+                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
                 border-width: 1px;
                 border-color: Theme.hover-line;
                 dialog := VerticalLayout {

@@ -38,6 +38,7 @@ use tokio::{
 
 use crate::{
     eq::EqSink,
+    local,
     settings::Shared,
     soloist,
 };
@@ -181,12 +182,26 @@ pub async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, emit: Emit, data_dir: Pat
     let mut notice = String::new();
     let mut no_soloist: Option<String> = None;
 
-    loop {
+    'again: loop {
+        if shared.lock().offline {
+            let end = local::run(&mut rx, &emit, &cache, &shared).await;
+            emit(Event::Stopped);
+            match end {
+                End::Quit => return emit(Event::Quit),
+                End::Logout => {
+                    notice = forget(&data_dir).err().unwrap_or_default();
+                    credentials = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
         let Some(login) = credentials.clone() else {
             emit(Event::NeedLogin(std::mem::take(&mut notice)));
             loop {
                 match rx.recv().await {
                     Some(Cmd::Connect) => break,
+                    Some(Cmd::Restart) => continue 'again,
                     Some(Cmd::Quit) | None => return emit(Event::Quit),
                     _ => {}
                 }
@@ -354,7 +369,8 @@ async fn connected(
                     () = quit_requested(rx) => return Ok(End::Quit),
                 }
                 *retry = Duration::from_secs(5);
-                let end = soloist::run(&mut library, rx, emit, cache, &setup, data_dir).await;
+                let normalise = shared.lock().normalise;
+                let end = soloist::run(&mut library, rx, emit, cache, &setup, data_dir, normalise).await;
                 emit(Event::Stopped);
                 session.shutdown();
                 return match end {
@@ -387,7 +403,7 @@ async fn connected(
         player_config,
         session.clone(),
         mixer.get_soft_volume(),
-        move || Box::new(EqSink::new(sink(None, AudioFormat::default()), eq_settings)),
+        move || Box::new(EqSink::new(sink(None, AudioFormat::F32), eq_settings)),
     );
     let mut events = player.get_player_event_channel();
     let mut volume = cache.volume().unwrap_or(u16::MAX / 2);

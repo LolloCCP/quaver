@@ -27,6 +27,15 @@ export global Theme {
     out property <string> icons: "Segoe Fluent Icons";
 }
 
+// The custom theme's colors: 0 is the background, 1 the highlight.
+export global Custom {
+    in property <color> base;
+    in property <color> highlight;
+    pure callback hex(color) -> string;
+    callback picked(int, color);
+    callback typed(int, string);
+}
+
 // The painted picture behind everything (art::Scene). Two layers cross-fade.
 export global Scene {
     in property <image> a;
@@ -349,6 +358,138 @@ export component EqBand inherits Rectangle {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.pick(touch.mouse-y); }
         }
         double-clicked => { root.commit(0); }
+    }
+}
+
+// Saturation to the right, brightness upwards, hue in the strip below.
+export component ColorPicker inherits VerticalLayout {
+    in property <string> label;
+    in property <color> color;
+    callback picked(color);
+    callback typed(string);
+    property <float> hue;
+    property <float> sat;
+    property <float> val;
+    property <color> shown: hsv(root.hue, root.sat, root.val);
+    function follow() {
+        // A color's hue and saturation can't be told from gray or black, so a picked one is kept.
+        if (root.shown != root.color) {
+            root.hue = root.color.to-hsv().hue;
+            root.sat = root.color.to-hsv().saturation;
+            root.val = root.color.to-hsv().value;
+        }
+        if (!input.has-focus) { input.text = Custom.hex(root.color); }
+    }
+    function pick(h: float, s: float, v: float) {
+        root.hue = max(0, min(359, h));
+        root.sat = max(0, min(1, s));
+        root.val = max(0, min(1, v));
+        root.picked(root.shown);
+    }
+    spacing: 10px;
+    preferred-width: 200px;
+    init => { root.follow(); }
+    changed color => { root.follow(); }
+    Text { text: root.label; color: Theme.text; }
+    square := Rectangle {
+        height: 140px;
+        accessible-role: slider;
+        accessible-label: root.label + ", saturation and brightness";
+        accessible-value: round(root.sat * 100) + ", " + round(root.val * 100);
+        square-focus := FocusScope {
+            focus-on-click: false;
+            key-pressed(e) => {
+                if (e.modifiers.control) { return reject; }
+                if (e.text == Key.LeftArrow) { root.pick(root.hue, root.sat - 0.02, root.val); return accept; }
+                if (e.text == Key.RightArrow) { root.pick(root.hue, root.sat + 0.02, root.val); return accept; }
+                if (e.text == Key.UpArrow) { root.pick(root.hue, root.sat, root.val + 0.02); return accept; }
+                if (e.text == Key.DownArrow) { root.pick(root.hue, root.sat, root.val - 0.02); return accept; }
+                return reject;
+            }
+        }
+        Rectangle { border-radius: 10px; background: hsv(root.hue, 1, 1); }
+        Rectangle { border-radius: 10px; background: @linear-gradient(90deg, #ffffff 0%, #ffffff00 100%); }
+        Rectangle { border-radius: 10px; background: @linear-gradient(0deg, #000000 0%, #00000000 100%); }
+        Rectangle { border-radius: 10px; border-width: square-focus.has-focus ? 2px : 1px; border-color: square-focus.has-focus ? Theme.accent : Theme.line; }
+        Rectangle {
+            x: root.sat * parent.width - 9px;
+            y: (1 - root.val) * parent.height - 9px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: root.shown;
+            border-width: 2px;
+            border-color: white;
+            Rectangle { x: -1px; y: -1px; width: 20px; height: 20px; border-radius: 10px; border-width: 1px; border-color: #00000080; }
+        }
+        square-touch := TouchArea {
+            function at() { root.pick(root.hue, self.mouse-x / self.width, 1 - self.mouse-y / self.height); }
+            moved => { self.at(); }
+            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { self.at(); } }
+        }
+    }
+    strip := Rectangle {
+        height: 18px;
+        accessible-role: slider;
+        accessible-label: root.label + ", hue";
+        accessible-value: round(root.hue);
+        accessible-value-minimum: 0;
+        accessible-value-maximum: 359;
+        accessible-action-increment => { root.pick(root.hue + 5, root.sat, root.val); }
+        accessible-action-decrement => { root.pick(root.hue - 5, root.sat, root.val); }
+        strip-focus := FocusScope {
+            focus-on-click: false;
+            key-pressed(e) => {
+                if (e.modifiers.control) { return reject; }
+                if (e.text == Key.LeftArrow) { root.pick(root.hue - 2, root.sat, root.val); return accept; }
+                if (e.text == Key.RightArrow) { root.pick(root.hue + 2, root.sat, root.val); return accept; }
+                return reject;
+            }
+        }
+        Rectangle {
+            border-radius: 9px;
+            border-width: strip-focus.has-focus ? 2px : 1px;
+            border-color: strip-focus.has-focus ? Theme.accent : Theme.line;
+            background: @linear-gradient(90deg, #ff0000 0%, #ffff00 16.7%, #00ff00 33.3%, #00ffff 50%, #0000ff 66.7%, #ff00ff 83.3%, #ff0000 100%);
+        }
+        Rectangle {
+            x: root.hue / 359 * (parent.width - self.width);
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: hsv(root.hue, 1, 1);
+            border-width: 2px;
+            border-color: white;
+            Rectangle { x: -1px; y: -1px; width: 20px; height: 20px; border-radius: 10px; border-width: 1px; border-color: #00000080; }
+        }
+        strip-touch := TouchArea {
+            function at() { root.pick((self.mouse-x - 9px) / (self.width - 18px) * 359, root.sat, root.val); }
+            moved => { self.at(); }
+            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { self.at(); } }
+        }
+    }
+    Rectangle {
+        height: 36px;
+        border-radius: 18px;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.line;
+        TouchArea { mouse-cursor: text; clicked => { input.focus(); } }
+        Rectangle { x: 10px; width: 18px; height: 18px; border-radius: 9px; background: root.color; border-width: 1px; border-color: Theme.hover-line; }
+        input := TextInput {
+            x: 40px;
+            width: root.width - 60px;
+            height: 100%;
+            single-line: true;
+            color: Theme.text;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: root.label + ", as a hex code";
+            edited => { root.typed(self.text); }
+            changed has-focus => { if (!self.has-focus) { self.text = Custom.hex(root.color); } }
+        }
     }
 }
 

@@ -130,15 +130,21 @@ impl Sequence {
             return Started::Skip;
         }
         if self.ahead.as_ref().is_some_and(|a| a.uri == uri) {
-            let ahead = self.ahead.take().expect("checked above");
-            if !ahead.from_queue {
-                self.at = if self.at + 1 < self.order.len() { self.at + 1 } else { 0 };
-            }
-            self.expected = Some(ahead.uri);
+            self.go_ahead();
             return Started::Ours;
         }
         *self = Self { shuffle: self.shuffle, repeat: self.repeat, ..Default::default() };
         Started::Foreign
+    }
+
+    /// The song ahead becomes the current one.
+    fn go_ahead(&mut self) -> Option<String> {
+        let ahead = self.ahead.take()?;
+        if !ahead.from_queue {
+            self.at = if self.at + 1 < self.order.len() { self.at + 1 } else { 0 };
+        }
+        self.expected = Some(ahead.uri);
+        self.expected.clone()
     }
 
     /// Whether `started` can place a song.
@@ -151,9 +157,7 @@ impl Sequence {
     pub fn ran_out(&mut self) -> Option<String> {
         self.stale.clear();
         self.hand_over();
-        let uri = self.ahead.as_ref()?.uri.clone();
-        self.started(&uri);
-        Some(uri)
+        self.go_ahead()
     }
 
     /// The player was started anew: it holds nothing of ours any more.
@@ -371,6 +375,14 @@ mod tests {
         p.play(&mut s, again);
         run(&mut s, &mut p, 4);
         assert_eq!(p.heard, "aaqbc");
+    }
+
+    #[test]
+    fn queueing_the_current_song_plays_it_once_more() {
+        let mut s = Sequence::default();
+        s.start(list("ab"), "a");
+        s.enqueue("a".into());
+        assert_eq!([s.ran_out(), s.ran_out(), s.ran_out()], [Some("a".into()), Some("b".into()), None]);
     }
 
     #[test]
