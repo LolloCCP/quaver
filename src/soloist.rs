@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::OnceLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -22,15 +22,19 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
 use crate::{
     announce::{self, Announcer},
-    backend::{Cmd, Emit, End, Event, Jam, Library},
-    sequence::{Sequence, Started},
+    backend::{Cmd, Emit, End, Event, Jam, Library, SEARCH},
+    connect::Connect,
 };
 
 const QUEUE_SHOWN: usize = 80;
+/// Without being asked, Soloist tells only so much of the queue.
+const QUEUE_TOLD: usize = 10;
 /// How often to look whether Windows plays somewhere else now.
 pub const OUTPUT_CHECK: Duration = Duration::from_secs(2);
 /// How often to look for a Jam.
 const JAM_CHECK: Duration = Duration::from_secs(15);
+/// A paired Soloist says it isn't signed in, too, until it has reached Spotify.
+const SIGN_IN: Duration = Duration::from_secs(5);
 /// Pressing "previous" later than this into a song restarts it.
 pub const RESTART_AFTER_MS: u32 = 3000;
 
@@ -260,13 +264,15 @@ pub async fn run(
     let mut output_check = tokio::time::interval(OUTPUT_CHECK);
     let mut jam_check = tokio::time::interval(JAM_CHECK);
     let (jam_tx, mut jams) = mpsc::unbounded_channel();
-    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2, asked: String::new(), starting: false, context: String::new(), autoplay: vec![] };
+    let mut player = Player { socket, emit: emit.clone(), track: String::new(), active: false, says_playing: false, playing: false, position: (0, 0), paired: None, unpaired: None, jam: None, upcoming: None, queue_asked: false, resume: None, catch_up: None, volume: u16::MAX / 2 };
     player.volume = cache.volume().unwrap_or(u16::MAX / 2);
+    let connect = Connect::new(library.session.clone(), &data_dir.join("soloist-state"));
 
     loop {
         tokio::select! {
             _ = session_check.tick() => if library.session.is_invalid() { return Ok(End::Lost) },
             _ = output_check.tick() => {
+                player.ask_to_pair(SIGN_IN);
                 announcer = if player.paired == Some(true) { None } else { announced(announcer.take(), child.id()).await };
                 // Soloist stays on the output it started with and can't be told to change it.
                 let now = tokio::task::spawn_blocking(output).await.ok().flatten();
@@ -304,8 +310,12 @@ pub async fn run(
                             library.load_cover(player.track.clone(), url);
                         }
                         player.show_queue(library).await;
-                    } else if event["type"] == "queue_changed" && player.queue_changed(&event) && library.queue_shown {
-                        library.show_queue(player.outside.clone());
+                    } else if event["type"] == "queue_changed" && library.queue_shown {
+                        match player.queue_changed(&event) {
+                            Queue::Same => {}
+                            Queue::Cut => player.show_queue(library).await,
+                            Queue::New(uris) => library.show_queue(uris),
+                        }
                     }
                 }
                 Some(Ok(_)) => {}
@@ -325,25 +335,9 @@ pub async fn run(
                 let Some(cmd) = library.handle(cmd) else { continue };
                 if player.jam.is_some() {
                     player.jam_command(cmd).await;
-                } else if let Cmd::Play { context, track } = &cmd && track.is_empty() {
-                    match library.all_tracks(context).await {
-                        Ok(tracks) => {
-                            let first = player.sequence.start(tracks, "");
-                            player.play(first).await;
-                            player.hand_over().await;
-                        }
-                        Err(e) => emit(Event::Status(e.error.to_string())),
-                    }
-                } else if let Cmd::Play { context, track } = &cmd && !context.is_empty() {
-                    // The whole list is needed to go on after this song; meanwhile it already plays.
-                    let first = player.sequence.start(vec![track.clone()], track);
-                    player.play(first).await;
-                    match library.all_tracks(context).await {
-                        Ok(tracks) => player.extend(tracks).await,
-                        Err(e) => emit(Event::Status(format!("Only this song could be loaded: {}", e.error))),
-                    }
-                } else {
-                    player.command(cmd).await;
+                } else if let Err(e) = player.shared_command(cmd, &connect, library).await {
+                    log::warn!("connect: {e}");
+                    emit(Event::Status(format!("Spotify refused that: {}", e.error)));
                 }
                 player.show_queue(library).await;
             }
@@ -363,32 +357,40 @@ async fn announced(old: Option<Announcer>, soloist: Option<u32>) -> Option<Annou
     Announcer::start(address, port).inspect_err(|e| log::warn!("announce: {e}")).ok()
 }
 
+#[derive(Debug, PartialEq)]
+enum Queue {
+    Same,
+    /// There is more of it, which has to be asked for.
+    Cut,
+    New(Vec<String>),
+}
+
 struct Player {
     socket: Socket,
     emit: Emit,
-    sequence: Sequence,
     track: String,
+    /// Whether the sound is ours to make, and not another device's.
+    active: bool,
+    /// What Soloist last said, which may be about another device.
+    says_playing: bool,
     playing: bool,
     /// Position and when it was valid, in ms since 1970.
     position: (u32, u64),
     paired: Option<bool>,
+    /// Since when it isn't signed in, until that was said.
+    unpaired: Option<Instant>,
     /// While there is a Jam, the order of songs is its business.
     jam: Option<Jam>,
-    /// What Soloist says comes next, for when the order isn't ours.
-    outside: Vec<String>,
-    /// What to go on with after a restart: the song, where in it, and whether it was playing.
-    resume: Option<(String, u32, bool)>,
-    /// Where to move to once the resumed song plays, and whether it should.
-    catch_up: Option<(u32, bool)>,
+    /// What comes next, as it is shown.
+    upcoming: Option<Vec<String>>,
+    /// Whether the whole queue was asked for and is still to come.
+    queue_asked: bool,
+    /// What to go on with after a restart: where in the song, and whether it was playing.
+    resume: Option<(u32, bool)>,
+    /// Where to move to once the resumed song plays.
+    catch_up: Option<u32>,
     /// What the volume should be; Soloist starts with its own.
     volume: u16,
-    /// What was last started from here, and whether Soloist has yet to get to it.
-    asked: String,
-    starting: bool,
-    /// What Soloist says it was started with. Autoplay doesn't change it, someone else does.
-    context: String,
-    /// What Spotify would go on with by itself.
-    autoplay: Vec<String>,
 }
 
 fn now_ms() -> u64 {
@@ -396,35 +398,28 @@ fn now_ms() -> u64 {
 }
 
 impl Player {
+    /// What plays on another device is left there.
     fn remember(&mut self) {
         self.catch_up = None;
-        self.resume = (!self.track.is_empty()).then(|| (self.track.clone(), self.position_ms(), self.playing));
-        self.sequence.player_restarted();
-        self.playing = false;
+        self.resume = (self.active && !self.track.is_empty()).then(|| (self.position_ms(), self.playing));
+        self.active = false;
+        self.follow();
     }
 
+    /// Spotify knows the song and how it goes on, but not exactly where in it we were.
     async fn resume(&mut self) {
-        let Some((uri, ms, playing)) = self.resume.take() else { return };
+        let Some((ms, playing)) = self.resume.take() else { return };
         self.send("activate", json!({})).await;
-        if self.sequence.active() {
-            self.start(uri).await;
-            self.catch_up = Some((ms, playing));
-            self.hand_over().await;
-        } else {
-            // Someone else's order: Spotify knows how it goes on.
-            if playing {
-                self.send("play", json!({})).await;
-            }
+        if playing {
+            self.catch_up = Some(ms);
+            self.send("play", json!({})).await;
         }
     }
 
     /// A song that is still loading can't be moved in, so this waits until it plays.
     async fn catch_up(&mut self) {
-        if self.playing && let Some((ms, playing)) = self.catch_up.take() {
+        if self.playing && let Some(ms) = self.catch_up.take() {
             self.send("seek", json!({ "position_ms": ms })).await;
-            if !playing {
-                self.send("pause", json!({})).await;
-            }
         }
     }
 
@@ -437,30 +432,48 @@ impl Player {
         }
     }
 
-    async fn play(&mut self, uri: Option<String>) {
-        if let Some(uri) = uri {
-            self.send("activate", json!({})).await;
-            self.start(uri).await;
-        }
-    }
-
-    async fn start(&mut self, uri: String) {
+    async fn play(&mut self, uri: &str) {
+        self.send("activate", json!({})).await;
         self.send("play", json!({ "uri": uri })).await;
-        self.asked = uri;
-        self.starting = true;
     }
 
-    async fn hand_over(&mut self) {
-        if let Some(uri) = self.sequence.hand_over() {
-            self.send("add_to_queue", json!({ "uri": uri })).await;
-        }
-    }
-
-    /// Fills in the list around the song that was started alone.
-    async fn extend(&mut self, tracks: Vec<String>) {
-        if let Some(current) = self.sequence.current().filter(|c| tracks.contains(c)) {
-            self.sequence.start(tracks, &current);
-            self.hand_over().await;
+    /// What only works, or works better, the way Spotify's own apps do it.
+    async fn shared_command(&mut self, cmd: Cmd, connect: &Connect, library: &Library) -> Result<(), Error> {
+        match cmd {
+            Cmd::Play { context, track } if context.is_empty() => {
+                if !self.active {
+                    connect.take_over().await?;
+                }
+                connect.jump(&track).await
+            }
+            Cmd::Play { context, track } => {
+                let played = if context.starts_with(SEARCH) {
+                    // Spotify's apps don't know a search as a list.
+                    let songs = library.all_tracks(&context).await.unwrap_or_else(|_| vec![track.clone()]);
+                    connect.play_songs(&songs, &track).await
+                } else {
+                    connect.play(&context, &track).await
+                };
+                if let Err(e) = played {
+                    log::warn!("connect play: {e}");
+                    // The documented way, which knows no place in a list.
+                    self.play(if track.is_empty() { &context } else { &track }).await;
+                }
+                Ok(())
+            }
+            Cmd::ClearQueue => connect.clear_queue().await,
+            Cmd::Toggle | Cmd::Resume if !self.active => {
+                if let Err(e) = connect.take_over().await {
+                    log::warn!("connect take over: {e}");
+                    self.send("activate", json!({})).await;
+                    self.send("play", json!({})).await;
+                }
+                Ok(())
+            }
+            cmd => {
+                self.command(cmd).await;
+                Ok(())
+            }
         }
     }
 
@@ -477,45 +490,24 @@ impl Player {
 
     async fn command(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Play { track, .. } => {
-                let uri = self.sequence.jump(&track);
-                self.play(uri).await;
-            }
             Cmd::Toggle => self.send(if self.playing { "pause" } else { "play" }, json!({})).await,
             Cmd::Resume => self.send("play", json!({})).await,
             Cmd::Pause => self.send("pause", json!({})).await,
             Cmd::Next => self.send("skip_next", json!({})).await,
-            Cmd::Prev => match self.position_ms() < RESTART_AFTER_MS && self.sequence.active() {
-                true => match self.sequence.previous() {
-                    Some(uri) => self.play(Some(uri)).await,
-                    None => self.send("seek", json!({ "position_ms": 0 })).await,
-                },
-                false => self.send(if self.sequence.active() { "seek" } else { "skip_prev" }, json!({ "position_ms": 0 })).await,
-            },
+            Cmd::Prev => self.send("skip_prev", json!({})).await,
             Cmd::Seek(ms) => self.send("seek", json!({ "position_ms": ms })).await,
             Cmd::Volume(v) => self.set_volume(v).await,
-            Cmd::Enqueue(uri) => {
-                if self.sequence.active() {
-                    self.sequence.enqueue(uri);
-                    self.hand_over().await;
-                } else {
-                    self.send("add_to_queue", json!({ "uri": uri })).await;
-                }
-            }
-            Cmd::ClearQueue => {
-                self.sequence.clear_queue();
-                self.hand_over().await;
-            }
-            Cmd::Shuffle(on) => {
-                self.sequence.set_shuffle(on);
-                (self.emit)(Event::Shuffle(on));
-                self.hand_over().await;
-            }
+            Cmd::Enqueue(uri) => self.send("add_to_queue", json!({ "uri": uri })).await,
+            // Opened again, so shown even if it is what was shown before.
+            Cmd::Queue => self.upcoming = None,
+            // The answer to these two is an `options_changed`.
+            Cmd::Shuffle(on) => self.send("set_shuffle", json!({ "enabled": on })).await,
             Cmd::Repeat(mode) => {
-                self.sequence.repeat = mode == 1;
-                (self.emit)(Event::Repeat(mode));
-                self.send("set_repeat_track", json!({ "enabled": mode == 2 })).await;
-                self.hand_over().await;
+                // Turning one off first keeps them from being on together.
+                let modes = [("set_repeat_context", mode == 1), ("set_repeat_track", mode == 2)];
+                for (command, enabled) in if mode == 1 { [modes[1], modes[0]] } else { modes } {
+                    self.send(command, json!({ "enabled": enabled })).await;
+                }
             }
             _ => {}
         }
@@ -524,9 +516,11 @@ impl Player {
     /// Returns whether the song changed.
     async fn event(&mut self, event: &Value) -> bool {
         let mut changed = false;
-        if let Some(context) = event["context"]["uri"].as_str() {
-            self.context = context.to_owned();
+        if let Some(active) = event["is_active"].as_bool() {
+            self.active = active;
+            self.follow();
         }
+        self.options(&event["options"]);
         match event["type"].as_str().unwrap_or_default() {
             "auth_state" => {
                 let paired = event["logged_in"].as_bool().unwrap_or(false);
@@ -539,11 +533,10 @@ impl Player {
                     self.resume().await;
                 }
                 if news {
-                    (self.emit)(Event::Player(if paired {
-                        "Connected. Soloist plays the sound.".into()
-                    } else {
-                        "Almost there: open Spotify on your phone or computer, on this network, and pick “Quaver” as the device. Once is enough.".into()
-                    }));
+                    self.unpaired = (!paired).then(Instant::now);
+                    if paired {
+                        (self.emit)(Event::Player("Connected. Soloist plays the sound.".into()));
+                    }
                 }
             }
             "playback_state" => {
@@ -572,7 +565,6 @@ impl Player {
             "error" => {
                 let message = event["message"].as_str().unwrap_or("Soloist refused that");
                 log::warn!("soloist: {message}");
-                self.starting = false;
                 (self.emit)(Event::Status(format!("Soloist: {message}")));
             }
             _ => {}
@@ -580,38 +572,20 @@ impl Player {
         changed
     }
 
+    fn ask_to_pair(&mut self, patience: Duration) {
+        if self.unpaired.take_if(|since| since.elapsed() >= patience).is_some() {
+            (self.emit)(Event::Player("Almost there: open Spotify on your phone or computer, on this network, and pick “Quaver” as the device. Once is enough.".into()));
+        }
+    }
+
     async fn item(&mut self, item: &Value) -> bool {
         let Some(uri) = item["uri"].as_str().filter(|u| !u.is_empty()) else { return false };
-        let ours = self.context == self.asked;
-        if ours {
-            self.starting = false;
-        }
         if uri == self.track {
             return false;
         }
-        if self.jam.is_none() {
-            let known = self.sequence.knows(uri);
-            if !known && ours && self.autoplay.iter().any(|a| a == uri) && let Some(next) = self.sequence.ran_out() {
-                log::info!("autoplay came before the list was over");
-                self.play(Some(next)).await;
-                self.hand_over().await;
-                return false;
-            }
-            // Songs queued elsewhere, and what played before ours starts, don't end the list.
-            let passing = !known && (self.starting || ours && !self.autoplay.iter().any(|a| a == uri));
-            if !passing {
-                match self.sequence.started(uri) {
-                    Started::Skip => {
-                        self.send("skip_next", json!({})).await;
-                        return false;
-                    }
-                    Started::Ours => self.hand_over().await,
-                    Started::Foreign => {}
-                }
-            }
-        }
         self.track = uri.to_owned();
         self.position = (0, now_ms());
+        self.catch_up = None;
         let facts = &item["decorations"];
         let name = |entity: &Value| entity["decorations"]["identity"]["name"].as_str().unwrap_or_default().to_owned();
         let artists: Vec<_> = facts["creators"].as_array().into_iter().flatten().map(|c| name(&c["entity"])).collect();
@@ -633,8 +607,13 @@ impl Player {
     }
 
     fn status(&mut self, status: &Value) {
+        self.says_playing = status == "playing";
+        self.follow();
+    }
+
+    fn follow(&mut self) {
         let position = self.position_ms();
-        let playing = status == "playing";
+        let playing = self.active && self.says_playing;
         if playing != self.playing {
             self.position = (position, now_ms());
             self.playing = playing;
@@ -642,42 +621,49 @@ impl Player {
         self.show_position();
     }
 
+    fn options(&self, options: &Value) {
+        if let Some(on) = options["shuffle"].as_bool() {
+            (self.emit)(Event::Shuffle(on));
+        }
+        if let Some(mode) = ["off", "context", "track"].iter().position(|m| options["repeat"] == *m) {
+            (self.emit)(Event::Repeat(mode as u8));
+        }
+    }
+
     fn show_position(&self) {
         (self.emit)(Event::Position { ms: self.position_ms(), playing: self.playing });
     }
 
-    async fn show_queue(&mut self, library: &mut Library) {
-        if !library.queue_shown {
-            return;
-        }
-        if self.sequence.active() {
-            library.show_queue(self.sequence.upcoming(QUEUE_SHOWN));
-        } else {
+    async fn show_queue(&mut self, library: &Library) {
+        if library.queue_shown {
             // The answer is a `queue_changed`.
+            self.queue_asked = true;
             self.send("get_queue", json!({ "limit": QUEUE_SHOWN })).await;
         }
     }
 
-    /// Returns whether the queue shown has to change.
-    fn queue_changed(&mut self, event: &Value) -> bool {
-        let upcoming = || event["upcoming"].as_array().into_iter().flatten();
-        self.autoplay = upcoming().filter(|e| e["source"] == "autoplay").filter_map(|e| e["item"]["uri"].as_str()).map(String::from).collect();
-        let uris: Vec<_> = upcoming()
+    fn queue_changed(&mut self, event: &Value) -> Queue {
+        let entries = event["upcoming"].as_array().map_or(&[][..], Vec::as_slice);
+        let uris: Vec<_> = entries
+            .iter()
             .filter_map(|e| e["item"]["uri"].as_str())
             .filter(|uri| uri.starts_with("spotify:track:"))
             .map(String::from)
             .collect();
-        let changed = !self.sequence.active() && uris != self.outside;
-        self.outside = uris;
-        changed
+        let cut = !std::mem::take(&mut self.queue_asked) && entries.len() == QUEUE_TOLD;
+        if self.upcoming.as_ref().is_some_and(|shown| *shown == uris || cut && shown.starts_with(&uris)) {
+            return Queue::Same;
+        }
+        if cut {
+            return Queue::Cut;
+        }
+        self.upcoming = Some(uris.clone());
+        Queue::New(uris)
     }
 
     fn set_jam(&mut self, jam: Option<Jam>) {
         if self.jam == jam {
             return;
-        }
-        if jam.is_some() && self.jam.is_none() {
-            self.sequence = Sequence::default();
         }
         (self.emit)(Event::Jam(jam.clone()));
         self.jam = jam;
@@ -686,14 +672,8 @@ impl Player {
     /// In a Jam nothing is arranged here: everything is passed on as it is.
     async fn jam_command(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Play { context, track } => self.play(Some(if track.is_empty() { context } else { track })).await,
-            Cmd::Prev => self.send("skip_prev", json!({})).await,
-            Cmd::Enqueue(uri) => self.send("add_to_queue", json!({ "uri": uri })).await,
+            Cmd::Play { context, track } => self.play(if track.is_empty() { &context } else { &track }).await,
             Cmd::ClearQueue => (self.emit)(Event::Status("The queue belongs to the Jam and can't be cleared here.".into())),
-            Cmd::Shuffle(on) => {
-                (self.emit)(Event::Shuffle(on));
-                self.send("set_shuffle", json!({ "enabled": on })).await;
-            }
             cmd => self.command(cmd).await,
         }
     }
@@ -740,7 +720,7 @@ mod tests {
         let events = Arc::new(Mutex::new(vec![]));
         let log = events.clone();
         let emit: Emit = Arc::new(move |e| log.lock().unwrap().push(e));
-        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2, asked: String::new(), starting: false, context: String::new(), autoplay: vec![] };
+        let player = Player { socket, emit, track: String::new(), active: true, says_playing: false, playing: false, position: (0, 0), paired: None, unpaired: None, jam: None, upcoming: None, queue_asked: false, resume: None, catch_up: None, volume: u16::MAX / 2 };
         (player, sent, events)
     }
 
@@ -750,73 +730,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_list_plays_song_after_song() {
+    async fn a_song_is_shown_once() {
         let (mut p, sent, events) = player().await;
-        let first = p.sequence.start(vec!["a".into()], "a");
-        p.play(first).await;
         assert!(p.event(&json!({ "type": "track_changed", "item": song("a") })).await);
-        p.extend(vec!["z".into(), "a".into(), "b".into(), "c".into()]).await;
-        assert_eq!(settled(&sent).await, ["activate", "play \"a\"", "add_to_queue \"b\""]);
-        assert!(p.event(&json!({ "type": "track_changed", "item": song("b") })).await);
-        assert_eq!(settled(&sent).await, ["add_to_queue \"c\""]);
-        assert!(!p.event(&json!({ "type": "track_changed", "item": song("b") })).await, "the same song again is no change");
+        assert!(!p.event(&json!({ "type": "track_changed", "item": song("a") })).await, "the same song again is no change");
         let events = events.lock().unwrap();
         let Event::Track { title, artist, album, duration_ms, cover_url, .. } = &events[0] else { panic!() };
         assert_eq!((title.as_str(), artist.as_str(), album.as_str(), *duration_ms), ("Name a", "A, B", "Album", 210000));
         assert_eq!(cover_url.as_deref(), Some("x"), "the biggest cover");
+        assert!(sent.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn leftovers_are_skipped() {
-        let (mut p, sent, _) = player().await;
-        for tracks in [["a", "b"], ["x", "y"]] {
-            let first = p.sequence.start(tracks.map(String::from).to_vec(), tracks[0]);
-            p.play(first).await;
-            p.event(&json!({ "type": "track_changed", "item": song(tracks[0]) })).await;
+    async fn another_device_is_left_alone() {
+        let (mut p, sent, events) = player().await;
+        p.event(&json!({ "type": "playback_state", "status": "playing", "item": song("a"), "is_active": true })).await;
+        assert!(p.playing);
+        p.event(&json!({ "type": "device_changed", "is_active": false, "device_name": "Phone" })).await;
+        for uri in ["b", "c", "b", "a"] {
+            p.event(&json!({ "type": "track_changed", "item": song(uri) })).await;
+            p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
+            p.event(&json!({ "type": "options_changed", "options": { "shuffle": true, "repeat": "context" } })).await;
+            p.event(&json!({ "type": "queue_changed", "upcoming": [{ "source": "context", "item": { "uri": "spotify:track:1" } }] })).await;
+            assert!(!p.playing, "the sound is elsewhere");
         }
-        settled(&sent).await;
-        assert!(!p.event(&json!({ "type": "track_changed", "item": song("b") })).await);
-        assert_eq!(settled(&sent).await, ["skip_next"]);
-        assert!(p.event(&json!({ "type": "track_changed", "item": song("y") })).await);
-    }
-
-    fn playing(uri: &str, context: &str) -> Value {
-        json!({ "type": "playback_state", "status": "playing", "item": song(uri), "context": { "uri": context } })
-    }
-
-    #[tokio::test]
-    async fn what_played_before_does_not_end_the_list() {
-        let (mut p, sent, _) = player().await;
-        let first = p.sequence.start(vec!["a".into(), "b".into(), "c".into()], "a");
-        p.play(first).await;
-        p.hand_over().await;
-        // Taking over reports what the phone played, which is neither ours nor a new start.
-        p.event(&playing("old", "phone")).await;
-        p.event(&playing("a", "a")).await;
-        // Queued on the phone, so it goes before ours.
-        p.event(&playing("guest", "a")).await;
-        p.event(&playing("b", "a")).await;
-        assert_eq!(settled(&sent).await, ["activate", "play \"a\"", "add_to_queue \"b\"", "add_to_queue \"c\""]);
-        p.event(&playing("theirs", "phone")).await;
-        assert!(!p.sequence.active(), "now someone else did start something");
-    }
-
-    #[tokio::test]
-    async fn autoplay_waits_until_the_list_is_over() {
-        let (mut p, sent, _) = player().await;
-        let first = p.sequence.start(vec!["a".into(), "b".into()], "a");
-        p.play(first).await;
-        p.hand_over().await;
-        p.event(&playing("a", "a")).await;
-        settled(&sent).await;
-        // What was handed over got lost.
-        p.queue_changed(&json!({ "upcoming": [{ "source": "autoplay", "item": { "uri": "x" } }, { "source": "autoplay", "item": { "uri": "y" } }] }));
-        assert!(!p.event(&playing("x", "a")).await);
-        assert_eq!(settled(&sent).await, ["activate", "play \"b\""]);
-        p.event(&playing("b", "b")).await;
-        assert!(p.event(&playing("y", "b")).await, "nothing left, so autoplay may go on");
-        assert!(!p.sequence.active());
-        assert_eq!(settled(&sent).await, Vec::<String>::new());
+        p.remember();
+        p.event(&json!({ "type": "auth_state", "logged_in": true, "is_active": false })).await;
+        assert_eq!(settled(&sent).await, ["set_volume 50"], "nothing is queued, skipped or started, also not after a restart");
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(e, Event::Repeat(1))) && events.iter().any(|e| matches!(e, Event::Shuffle(true))));
+        drop(events);
+        p.event(&json!({ "type": "playback_state", "status": "playing", "item": song("a"), "is_active": true })).await;
+        assert!(p.playing, "and back again");
     }
 
     #[tokio::test]
@@ -834,15 +779,14 @@ mod tests {
         p.command(Cmd::Volume(u16::MAX / 2)).await;
         p.command(Cmd::Toggle).await;
         p.command(Cmd::Repeat(2)).await;
+        p.command(Cmd::Repeat(1)).await;
         p.command(Cmd::Seek(1234)).await;
-        assert_eq!(settled(&sent).await, ["set_volume 50", "play", "set_repeat_track true", "seek 1234"]);
+        assert_eq!(settled(&sent).await, ["set_volume 50", "play", "set_repeat_context false", "set_repeat_track true", "set_repeat_track false", "set_repeat_context true", "seek 1234"]);
     }
 
     #[tokio::test]
     async fn a_jam_keeps_its_own_order() {
         let (mut p, sent, events) = player().await;
-        let first = p.sequence.start(["a", "b", "c"].map(String::from).to_vec(), "a");
-        p.play(first).await;
         p.event(&json!({ "type": "track_changed", "item": song("a") })).await;
         settled(&sent).await;
         let jam = Jam { names: vec!["A".into(), "B".into()], link: String::new() };
@@ -865,15 +809,13 @@ mod tests {
     #[tokio::test]
     async fn a_new_output_goes_on_with_the_same_song() {
         let (mut p, sent, _) = player().await;
-        let first = p.sequence.start(["a", "b"].map(String::from).to_vec(), "a");
-        p.play(first).await;
         p.event(&json!({ "type": "playback_state", "status": "playing", "item": song("a"), "position": { "position_ms": 61000, "timestamp_ms": now_ms() } })).await;
-        settled(&sent).await;
         p.remember();
-        p.event(&json!({ "type": "auth_state", "logged_in": false })).await;
+        p.event(&json!({ "type": "auth_state", "logged_in": false, "is_active": false })).await;
         assert_eq!(settled(&sent).await, Vec::<String>::new(), "not before it is signed in");
-        p.event(&json!({ "type": "auth_state", "logged_in": true })).await;
-        assert_eq!(settled(&sent).await, ["set_volume 50", "activate", "play \"a\"", "add_to_queue \"b\""]);
+        p.event(&json!({ "type": "auth_state", "logged_in": true, "is_active": false })).await;
+        assert_eq!(settled(&sent).await, ["set_volume 50", "activate", "play"]);
+        p.event(&json!({ "type": "device_changed", "is_active": true })).await;
         p.event(&json!({ "type": "playback_changed", "status": "buffering" })).await;
         assert_eq!(settled(&sent).await, Vec::<String>::new(), "still loading");
         p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
@@ -886,8 +828,7 @@ mod tests {
         p.event(&json!({ "type": "playback_changed", "status": "paused" })).await;
         p.remember();
         p.resume().await;
-        p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
-        assert_eq!(settled(&sent).await.last().unwrap(), "pause", "what was paused stays paused");
+        assert_eq!(settled(&sent).await, ["activate"], "what was paused stays paused");
     }
 
     #[tokio::test]
@@ -903,22 +844,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_queue_comes_from_soloist_when_the_order_is_not_ours() {
+    async fn the_whole_queue_is_shown() {
         let (mut p, _, _) = player().await;
-        let queue = json!({ "type": "queue_changed", "upcoming": [{ "item": { "uri": "spotify:track:1" } }, { "item": { "uri": "spotify:episode:2" } }] });
-        assert!(p.queue_changed(&queue) && !p.queue_changed(&queue), "only a change is a change");
-        assert_eq!(p.outside, ["spotify:track:1"]);
-        p.sequence.start(vec!["a".into()], "a");
-        assert!(!p.queue_changed(&json!({ "upcoming": [] })), "our own order is shown instead");
+        let uris = |n: usize| (0..n).map(|i| format!("spotify:track:{i}")).collect::<Vec<_>>();
+        let queue = |uris: Vec<String>| json!({ "type": "queue_changed", "upcoming": uris.iter().map(|u| json!({ "item": { "uri": u } })).collect::<Vec<_>>() });
+        for n in [0, 10, 30] {
+            (p.upcoming, p.queue_asked) = (None, true);
+            assert_eq!(p.queue_changed(&queue(uris(n))), Queue::New(uris(n)), "an answer is everything");
+        }
+        assert_eq!(p.queue_changed(&queue(uris(10))), Queue::Same, "the start of what is shown");
+        assert_eq!(p.queue_changed(&queue(uris(11)[1..].to_vec())), Queue::Cut);
+        assert_eq!(p.queue_changed(&queue(uris(2))), Queue::New(uris(2)));
+        let mixed = queue(vec!["spotify:track:1".into(), "spotify:episode:2".into()]);
+        assert_eq!(p.queue_changed(&mixed), Queue::New(vec!["spotify:track:1".into()]));
     }
 
     #[tokio::test]
     async fn pairing_is_announced_once() {
         let (mut p, _, events) = player().await;
-        for logged_in in [false, false, true] {
-            p.event(&json!({ "type": "auth_state", "logged_in": logged_in })).await;
+        let said = || events.lock().unwrap().iter().filter(|e| matches!(e, Event::Player(_))).count();
+        for _ in 0..2 {
+            p.event(&json!({ "type": "auth_state", "logged_in": false })).await;
         }
-        assert_eq!(events.lock().unwrap().iter().filter(|e| matches!(e, Event::Player(_))).count(), 2);
+        p.ask_to_pair(SIGN_IN);
+        assert_eq!(said(), 0, "it may still be signing in");
+        for _ in 0..2 {
+            p.ask_to_pair(Duration::ZERO);
+        }
+        assert_eq!(said(), 1);
+        p.event(&json!({ "type": "auth_state", "logged_in": true })).await;
+        p.ask_to_pair(Duration::ZERO);
+        assert_eq!(said(), 2, "connected, and nothing left to ask");
     }
 
     #[tokio::test]

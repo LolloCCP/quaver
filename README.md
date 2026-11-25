@@ -31,6 +31,9 @@ Can't connect? `cargo test probe -- --ignored --nocapture` prints why this netwo
 Through Soloist, Quaver asks for lossless and turns Spotify's loudness normalization off (or on, with "Same volume for
 every song"). That uses undocumented lines of Soloist's settings, which an update may change.
 
+Lists start through Spotify Connect's own, undocumented, commands, so the Spotify app sees the same list and can go on
+with it; without them only the chosen song plays. Pressing play in Quaver takes over from another device.
+
 ## Offline
 
 Settings > Offline plays the MP3, FLAC and Ogg Vorbis files in a folder of yours, without Spotify, a login or a network;

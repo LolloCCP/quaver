@@ -914,8 +914,10 @@ fn picture_urls(id: &str) -> Vec<String> {
     }
 }
 
+pub const SEARCH: &str = "spotify:search:";
+
 fn search_uri(query: &str) -> String {
-    format!("spotify:search:{}", form_urlencoded::byte_serialize(query.trim().as_bytes()).collect::<String>())
+    format!("{SEARCH}{}", form_urlencoded::byte_serialize(query.trim().as_bytes()).collect::<String>())
 }
 
 /// `hm://artistplaycontext/v1/page/spotify/album/<id>/km` -> `spotify:album:<id>`

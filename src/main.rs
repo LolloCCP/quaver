@@ -3,8 +3,10 @@
 mod announce;
 mod art;
 mod backend;
+mod connect;
 mod eq;
 mod history;
+mod instance;
 mod local;
 mod sequence;
 mod settings;
@@ -1045,6 +1047,7 @@ fn media_controls(app: &App, tx: UnboundedSender<Cmd>) -> Option<MediaControls> 
 
 fn main() -> Result<(), slint::PlatformError> {
     env_logger::init();
+    let Some(instance) = instance::claim(r"Local\Quaver") else { return Ok(()) };
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return Err("LOCALAPPDATA is not set".into());
     };
@@ -1413,6 +1416,19 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(Err(e)) = app.upgrade().map(|app| app.show()) {
                 log::error!("show window: {e}");
             }
+        }
+    });
+
+    instance.on_another({
+        let app = app.as_weak();
+        move || {
+            let _ = app.upgrade_in_event_loop(|app| {
+                if let Err(e) = app.show() {
+                    log::error!("show window: {e}");
+                }
+                app.window().set_minimized(false);
+                app.window().with_winit_window(|window| window.focus_window());
+            });
         }
     });
 
