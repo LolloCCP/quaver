@@ -2,6 +2,7 @@
 name = "quaver"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 # Pinned: 0.8.0 on crates.io lacks the Spirc queue API and the CDN retry fix.
@@ -11,6 +12,7 @@ librespot-metadata = { git = "https://github.com/librespot-org/librespot", rev =
 librespot-oauth = { git = "https://github.com/librespot-org/librespot", rev = "15e02e86c72d96dd39d548e3749f00abe39ffdde" }
 librespot-playback = { git = "https://github.com/librespot-org/librespot", rev = "15e02e86c72d96dd39d548e3749f00abe39ffdde" }
 librespot-protocol = { git = "https://github.com/librespot-org/librespot", rev = "15e02e86c72d96dd39d548e3749f00abe39ffdde" }
+cpal = "0.16"
 env_logger = { version = "0.11", default-features = false }
 form_urlencoded = "1"
 log = "0.4"

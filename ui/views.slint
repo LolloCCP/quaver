@@ -1,4 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, AboutSlint } from "std-widgets.slint";
 export struct ThemeCard { id: string, name: string, preview: image }
 
 import { Theme, Scene, Glass, PointerLight, KeyFocus, Icon, Pill, Switch, Bar, EqBand, SecretBox, Link, Cover, Transport, Timeline } from "glass.slint";
@@ -465,6 +465,21 @@ export component SettingsView inherits ScrollView {
         Section {
             text: "Account";
             HorizontalLayout { alignment: start; Pill { quiet: true; text: "Sign out"; clicked => { root.logout(); } } }
+        }
+        Section {
+            text: "About";
+            Text { text: "Quaver is unofficial and not affiliated with or approved by Spotify. Free software under the MIT license."; color: Theme.dim; wrap: word-wrap; }
+            HorizontalLayout {
+                alignment: start;
+                // Slint's credit is made for a dark background.
+                Rectangle {
+                    width: 280px;
+                    height: 110px;
+                    border-radius: 14px;
+                    background: #17171d;
+                    AboutSlint { width: 100%; height: 100%; }
+                }
+            }
         }
     }
 }

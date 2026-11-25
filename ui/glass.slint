@@ -168,7 +168,7 @@ export component Pill inherits TouchArea {
         border-color: focus.has-focus ? Theme.text : root.has-hover ? Theme.hover-line : Theme.line;
         drop-shadow-blur: root.has-hover ? 14px : 0px;
         drop-shadow-offset-y: 4px;
-        drop-shadow-color: root.filled ? Theme.fill.with-alpha(0.5) : #00000059;
+        drop-shadow-color: root.filled ? Theme.fill.with-alpha(0.5) : Theme.bright ? transparent : #00000059;
         Shine { x: 6px; y: 1px; width: parent.width - 12px; height: parent.height * 0.45; border-radius: self.height; strength: root.filled ? 0.45 : 0.16; }
     }
     focus := KeyFocus { activated => { root.clicked(); } }

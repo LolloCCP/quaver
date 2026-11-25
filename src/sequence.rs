@@ -141,6 +141,14 @@ impl Sequence {
         Started::Foreign
     }
 
+    /// The player was started anew: it holds nothing of ours any more.
+    pub fn player_restarted(&mut self) {
+        if let Some(ahead) = self.ahead.take().filter(|a| a.from_queue) {
+            self.queued.push_front(ahead.uri);
+        }
+        self.stale.clear();
+    }
+
     /// Moves back and returns the song to play.
     pub fn previous(&mut self) -> Option<String> {
         self.at = self.at.checked_sub(1)?;
@@ -333,6 +341,21 @@ mod tests {
         p.give(&mut s);
         run(&mut s, &mut p, 6);
         assert_eq!(p.heard, "abcdef");
+    }
+
+    #[test]
+    fn a_restarted_player_is_given_everything_again() {
+        let (mut s, mut p) = (Sequence::default(), Player::default());
+        let first = s.start(list("abc"), "a");
+        p.play(&mut s, first);
+        s.enqueue("q".into());
+        p.give(&mut s);
+        p = Player { heard: p.heard, ..Default::default() };
+        s.player_restarted();
+        let again = s.current();
+        p.play(&mut s, again);
+        run(&mut s, &mut p, 4);
+        assert_eq!(p.heard, "aaqbc");
     }
 
     #[test]

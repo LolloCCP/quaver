@@ -7,6 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use cpal::traits::{DeviceTrait, HostTrait};
 use futures_util::{SinkExt, StreamExt};
 use librespot_core::{Error, cache::Cache};
 use serde_json::{Value, json};
@@ -23,6 +24,8 @@ use crate::{
 };
 
 const QUEUE_SHOWN: usize = 80;
+/// How often to look whether Windows plays somewhere else now.
+const OUTPUT_CHECK: Duration = Duration::from_secs(2);
 /// How often to look for a Jam.
 const JAM_CHECK: Duration = Duration::from_secs(15);
 /// Pressing "previous" later than this into a song restarts it.
@@ -93,6 +96,11 @@ fn run_tool(program: &str, options: &[&str], rest: &[&std::ffi::OsStr]) -> Resul
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// The name of what Windows plays through, such as the earbuds that were just connected.
+fn output() -> Option<String> {
+    cpal::default_host().default_output_device()?.name().ok()
+}
+
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 async fn launch(setup: &Setup, data_dir: &Path) -> Result<(Child, Socket), Error> {
@@ -140,6 +148,7 @@ pub async fn run(
     setup: &Setup,
     data_dir: &Path,
 ) -> Result<End, Error> {
+    let mut playing_on = tokio::task::spawn_blocking(output).await.ok().flatten();
     let (mut child, socket) = {
         let starting = launch(setup, data_dir);
         tokio::pin!(starting);
@@ -158,14 +167,30 @@ pub async fn run(
     emit(Event::Ready);
     library.load_start();
     let mut session_check = tokio::time::interval(Duration::from_secs(5));
+    let mut output_check = tokio::time::interval(OUTPUT_CHECK);
     let mut jam_check = tokio::time::interval(JAM_CHECK);
     let (jam_tx, mut jams) = mpsc::unbounded_channel();
-    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![] };
+    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None };
     player.set_volume(cache.volume().unwrap_or(u16::MAX / 2)).await;
 
     loop {
         tokio::select! {
             _ = session_check.tick() => if library.session.is_invalid() { return Ok(End::Lost) },
+            _ = output_check.tick() => {
+                // Soloist stays on the output it started with and can't be told to change it.
+                let now = tokio::task::spawn_blocking(output).await.ok().flatten();
+                if now.is_none() || now == playing_on {
+                    continue;
+                }
+                playing_on = now;
+                player.remember();
+                if let Err(e) = child.kill().await {
+                    log::warn!("soloist: {e}");
+                }
+                let (new_child, socket) = launch(setup, data_dir).await?;
+                (child, player.socket) = (new_child, socket);
+                player.set_volume(cache.volume().unwrap_or(u16::MAX / 2)).await;
+            }
             _ = jam_check.tick() => {
                 let (session, tx) = (library.session.clone(), jam_tx.clone());
                 tokio::spawn(async move {
@@ -248,6 +273,10 @@ struct Player {
     jam: Option<Jam>,
     /// What Soloist says comes next, for when the order isn't ours.
     outside: Vec<String>,
+    /// What to go on with after a restart: the song, where in it, and whether it was playing.
+    resume: Option<(String, u32, bool)>,
+    /// Where to move to once the resumed song plays, and whether it should.
+    catch_up: Option<(u32, bool)>,
 }
 
 fn now_ms() -> u64 {
@@ -255,6 +284,38 @@ fn now_ms() -> u64 {
 }
 
 impl Player {
+    fn remember(&mut self) {
+        self.catch_up = None;
+        self.resume = (!self.track.is_empty()).then(|| (self.track.clone(), self.position_ms(), self.playing));
+        self.sequence.player_restarted();
+        self.playing = false;
+    }
+
+    async fn resume(&mut self) {
+        let Some((uri, ms, playing)) = self.resume.take() else { return };
+        self.send("activate", json!({})).await;
+        if self.sequence.active() {
+            self.send("play", json!({ "uri": uri })).await;
+            self.catch_up = Some((ms, playing));
+            self.hand_over().await;
+        } else {
+            // Someone else's order: Spotify knows how it goes on.
+            if playing {
+                self.send("play", json!({})).await;
+            }
+        }
+    }
+
+    /// A song that is still loading can't be moved in, so this waits until it plays.
+    async fn catch_up(&mut self) {
+        if self.playing && let Some((ms, playing)) = self.catch_up.take() {
+            self.send("seek", json!({ "position_ms": ms })).await;
+            if !playing {
+                self.send("pause", json!({})).await;
+            }
+        }
+    }
+
     async fn send(&mut self, command: &str, mut fields: Value) {
         fields["type"] = "command".into();
         fields["command"] = command.into();
@@ -347,6 +408,9 @@ impl Player {
         match event["type"].as_str().unwrap_or_default() {
             "auth_state" => {
                 let paired = event["logged_in"].as_bool().unwrap_or(false);
+                if paired {
+                    self.resume().await;
+                }
                 if self.paired.replace(paired) != Some(paired) {
                     (self.emit)(Event::Player(if paired {
                         "Connected. Soloist plays the sound.".into()
@@ -359,12 +423,16 @@ impl Player {
                 changed = self.item(&event["item"]).await;
                 self.place(&event["position"]);
                 self.status(&event["status"]);
+                self.catch_up().await;
                 if let Some(volume) = event["volume"].as_u64() {
                     (self.emit)(Event::Volume((volume.min(100) * 65535 / 100) as u16));
                 }
             }
             "track_changed" => changed = self.item(&event["item"]).await,
-            "playback_changed" => self.status(&event["status"]),
+            "playback_changed" => {
+                self.status(&event["status"]);
+                self.catch_up().await;
+            }
             "position_sync" => {
                 self.place(&event["position"]);
                 self.show_position();
@@ -525,7 +593,7 @@ mod tests {
         let events = Arc::new(Mutex::new(vec![]));
         let log = events.clone();
         let emit: Emit = Arc::new(move |e| log.lock().unwrap().push(e));
-        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![] };
+        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None };
         (player, sent, events)
     }
 
@@ -606,6 +674,34 @@ mod tests {
         p.set_jam(None);
         let jams = events.lock().unwrap().iter().filter(|e| matches!(e, Event::Jam(_))).count();
         assert_eq!(jams, 2, "told once when it starts and once when it ends");
+    }
+
+    #[tokio::test]
+    async fn a_new_output_goes_on_with_the_same_song() {
+        let (mut p, sent, _) = player().await;
+        let first = p.sequence.start(["a", "b"].map(String::from).to_vec(), "a");
+        p.play(first).await;
+        p.event(&json!({ "type": "playback_state", "status": "playing", "item": song("a"), "position": { "position_ms": 61000, "timestamp_ms": now_ms() } })).await;
+        settled(&sent).await;
+        p.remember();
+        p.event(&json!({ "type": "auth_state", "logged_in": false })).await;
+        assert_eq!(settled(&sent).await, Vec::<String>::new(), "not before it is signed in");
+        p.event(&json!({ "type": "auth_state", "logged_in": true })).await;
+        assert_eq!(settled(&sent).await, ["activate", "play \"a\"", "add_to_queue \"b\""]);
+        p.event(&json!({ "type": "playback_changed", "status": "buffering" })).await;
+        assert_eq!(settled(&sent).await, Vec::<String>::new(), "still loading");
+        p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
+        let commands = settled(&sent).await;
+        let at: u32 = commands[0].strip_prefix("seek ").unwrap().parse().unwrap();
+        assert!((61000..61600).contains(&at) && commands.len() == 1, "{commands:?}");
+        p.event(&json!({ "type": "auth_state", "logged_in": true })).await;
+        p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
+        assert_eq!(settled(&sent).await, Vec::<String>::new(), "only once");
+        p.event(&json!({ "type": "playback_changed", "status": "paused" })).await;
+        p.remember();
+        p.resume().await;
+        p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
+        assert_eq!(settled(&sent).await.last().unwrap(), "pause", "what was paused stays paused");
     }
 
     #[tokio::test]
