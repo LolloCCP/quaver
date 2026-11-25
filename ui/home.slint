@@ -59,6 +59,8 @@ component CardView inherits Rectangle {
     callback open();
     callback play();
     property <bool> lit: touch.has-hover || go.has-hover;
+    // There is nothing to play about a person.
+    property <bool> person: root.card.kind == 2 && root.card.subtitle == "Profile";
     width: 176px;
     border-radius: 18px;
     background: root.lit ? Theme.selected : transparent;
@@ -75,7 +77,7 @@ component CardView inherits Rectangle {
         x: 10px + 156px - 52px;
         y: root.lit ? 10px + 156px - 52px : 10px + 156px - 44px;
         size: 44px;
-        visible: self.opacity > 0;
+        visible: self.opacity > 0 && !root.person;
         opacity: root.lit ? 1 : 0;
         animate y, opacity { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         clicked => { root.play(); }
@@ -132,6 +134,10 @@ component ShelfView inherits Rectangle {
 export component HomeView inherits ScrollView {
     in property <string> greeting;
     in property <string> note;
+    in property <string> hint;
+    // 0 for nobody to follow, 1 not followed, 2 followed
+    in property <int> follow;
+    callback set-follow(bool);
     in property <[Card]> tiles;
     in property <[Shelf]> shelves;
     callback open(Card);
@@ -148,7 +154,14 @@ export component HomeView inherits ScrollView {
         padding-top: 4px;
         padding-bottom: 16px;
         spacing: 14px;
-        HorizontalLayout { padding-left: 8px; Text { text: root.greeting; color: Theme.text; font-size: 32px; font-weight: 700; } }
+        HorizontalLayout {
+            padding-left: 8px;
+            spacing: 18px;
+            alignment: start;
+            Text { text: root.greeting; color: Theme.text; font-size: 32px; font-weight: 700; }
+            if root.follow != 0: VerticalLayout { alignment: center; Pill { quiet: true; selected: root.follow == 2; text: root.follow == 2 ? "Following" : "Follow"; clicked => { root.set-follow(root.follow == 1); } } }
+        }
+        if root.hint != "": HorizontalLayout { padding-left: 8px; Text { text: root.hint; color: Theme.dim; wrap: word-wrap; } }
         if root.note != "": HorizontalLayout {
             padding-left: 8px;
             spacing: 14px;

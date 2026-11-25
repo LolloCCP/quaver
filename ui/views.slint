@@ -1,5 +1,6 @@
 import { ScrollView, AboutSlint } from "std-widgets.slint";
 export struct ThemeCard { id: string, name: string, preview: image }
+export struct Version { tag: string, about: string, used: bool }
 
 import { Theme, Scene, Glass, PointerLight, KeyFocus, Icon, Pill, Switch, Bar, EqBand, Custom, ColorPicker, SecretBox, Link, Cover, Transport, Timeline } from "glass.slint";
 
@@ -331,6 +332,19 @@ export component SettingsView inherits ScrollView {
     in property <bool> soloist;
     in property <bool> soloist-here;
     in property <bool> soloist-has-key;
+    in property <bool> soloist-paired;
+    property <bool> soloist-ready: root.soloist && root.soloist-paired;
+    property <bool> new-key;
+    property <int> soloist-step: !root.soloist-here ? 1 : !root.soloist-has-key || root.new-key ? 2 : !root.soloist ? 4 : 3;
+    callback open-spotify();
+    in property <string> version;
+    in property <[Version]> versions;
+    in property <bool> version-chosen;
+    in property <bool> updating;
+    in property <bool> update-ready;
+    in property <string> update-note;
+    callback use-version(string);
+    callback restart();
     in property <bool> downloading;
     in property <[ThemeCard]> themes;
     in property <string> theme;
@@ -415,26 +429,29 @@ export component SettingsView inherits ScrollView {
                 Pill { quiet: true; text: "Spotify Soloist"; selected: root.soloist; clicked => { root.set-soloist(true); } }
             }
             Text { text: root.soloist ? "Spotify's own player makes the sound, lossless where Spotify has it. The equalizer and streaming quality below don't reach it." : "If songs are refused, Spotify doesn't allow the built-in player on your account. Soloist is Spotify's own player and works there."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
-            Text { text: "Set up Soloist"; color: Theme.text; font-weight: 600; }
-            HorizontalLayout {
-                spacing: 10px;
-                Text { width: 18px; text: root.soloist-here ? "\u{e73e}" : "1"; font-family: root.soloist-here ? Theme.icons : "Segoe UI"; color: Theme.accent; vertical-alignment: center; }
-                Text { text: root.soloist-here ? "Soloist is downloaded (builds last 90 days)" : "Download it from Spotify. By doing so you accept Spotify's terms."; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
-                VerticalLayout { alignment: center; Pill { quiet: true; enabled: !root.downloading; text: root.downloading ? "Downloading…" : root.soloist-here ? "Download again" : "Download"; clicked => { root.soloist-download(); } } }
-                VerticalLayout { alignment: center; Pill { quiet: true; text: "About"; clicked => { root.soloist-about(); } } }
+            // Only what comes next, and nothing once it works.
+            Text {
+                text: root.soloist-step == 1 ? "Set up Soloist, step 1 of 3: download it from Spotify. By doing so you accept Spotify's terms."
+                    : root.soloist-step == 2 ? "Set up Soloist, step 2 of 3: get your free key on Spotify's page and copy it. Then come back and press Paste key."
+                    : root.soloist-step == 4 ? "Soloist is set up. Choose it above to use it."
+                    : root.soloist-ready ? "Soloist is connected and ready."
+                    : "Set up Soloist, step 3 of 3: in the Spotify app on this network, pick “Quaver” as the device, once. Allow it if Windows Firewall asks. If you did this before, it connects by itself.";
+                color: Theme.text;
+                wrap: word-wrap;
             }
             HorizontalLayout {
-                spacing: 10px;
-                Text { width: 18px; text: root.soloist-has-key ? "\u{e73e}" : "2"; font-family: root.soloist-has-key ? Theme.icons : "Segoe UI"; color: Theme.accent; vertical-alignment: center; }
-                VerticalLayout { alignment: center; Pill { quiet: true; text: "Get your key"; clicked => { root.soloist-get-key(); } } }
-                VerticalLayout { alignment: center; horizontal-stretch: 1; key := SecretBox { label: root.soloist-has-key ? "Paste a new key to replace yours" : "Paste your Soloist API key"; accepted(k) => { root.soloist-key(k); } } }
-                VerticalLayout { alignment: center; Pill { quiet: true; text: "Save"; clicked => { key.save(); } } }
+                spacing: 8px;
+                alignment: start;
+                if root.soloist-step == 1: Pill { quiet: true; enabled: !root.downloading; text: root.downloading ? "Downloading…" : "Download"; clicked => { root.soloist-download(); } }
+                if root.soloist-step == 1: Pill { quiet: true; text: "About Soloist"; clicked => { root.soloist-about(); } }
+                if root.soloist-step == 2: Pill { quiet: true; text: "Get your key"; clicked => { root.soloist-get-key(); } }
+                if root.soloist-step == 2: Pill { quiet: true; text: "Paste key"; clicked => { key.paste(); } }
+                if root.soloist-step == 2 && root.new-key: Pill { quiet: true; text: "Keep the old key"; clicked => { root.new-key = false; } }
+                if root.soloist-step == 3 && !root.soloist-ready: Pill { quiet: true; text: "Open Spotify"; clicked => { root.open-spotify(); } }
+                if root.soloist-step > 2: Pill { quiet: true; text: "Change key"; clicked => { root.new-key = true; } }
+                if root.soloist-step > 2: Pill { quiet: true; enabled: !root.downloading; text: root.downloading ? "Downloading…" : "Update Soloist"; clicked => { root.soloist-download(); } }
             }
-            HorizontalLayout {
-                spacing: 10px;
-                Text { width: 18px; text: "3"; color: Theme.accent; vertical-alignment: center; }
-                Text { text: "In the Spotify app on this network, pick “Quaver” as the device, once. Allow it if Windows Firewall asks."; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
-            }
+            key := SecretBox { visible: root.soloist-step == 2; height: self.visible ? 36px : 0px; label: "Or paste it here and press Enter"; accepted(k) => { root.new-key = false; root.soloist-key(k); } }
             if root.player-note != "": Text { text: root.player-note; color: Theme.accent; wrap: word-wrap; }
         }
         Section {
@@ -480,6 +497,24 @@ export component SettingsView inherits ScrollView {
             Text { text: "Jam: start or join one in the Spotify app with Quaver as the speaker. The people button in the player bar then shows who is in it, and its invite link."; color: Theme.dim; wrap: word-wrap; }
             Text { text: "Discord: Listen Along belongs to your Spotify account, so it follows what Quaver plays through Soloist. Connect Spotify to Discord once, and turn on “Display Spotify as your status”."; color: Theme.dim; wrap: word-wrap; }
             HorizontalLayout { alignment: start; Pill { quiet: true; text: "Open Discord's connections"; clicked => { root.discord(); } } }
+        }
+        Section {
+            text: "Updates";
+            Text {
+                text: root.version == "" ? "This copy was built from source, so it isn't updated by itself. Using a version below replaces it."
+                    : root.version-chosen ? "Quaver " + root.version + ". It stays on the version you chose until you use the newest one."
+                    : "Quaver " + root.version + ". New versions are installed when Quaver starts, and used from the next start.";
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+            if root.update-note != "": Text { text: root.update-note; color: Theme.accent; wrap: word-wrap; }
+            if root.update-ready: HorizontalLayout { alignment: start; Pill { quiet: true; text: "Restart now"; clicked => { root.restart(); } } }
+            for v in root.versions: HorizontalLayout {
+                spacing: 12px;
+                Text { width: 80px; text: v.tag; color: v.used ? Theme.accent : Theme.text; vertical-alignment: center; overflow: elide; }
+                Text { text: v.about; color: Theme.dim; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+                VerticalLayout { alignment: center; Pill { quiet: true; enabled: !root.updating && !v.used; selected: v.used; text: v.used ? "In use" : "Use"; clicked => { root.use-version(v.tag); } } }
+            }
         }
         Section {
             text: "Account";

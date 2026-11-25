@@ -40,6 +40,7 @@ use crate::{
     eq::EqSink,
     local,
     settings::Shared,
+    people::{self, Profile},
     soloist,
 };
 
@@ -69,6 +70,9 @@ pub enum Cmd {
     ClearQueue,
     /// Load the home page, unless that was done a moment ago and `again` isn't set.
     Home { again: bool },
+    /// Show a profile by its URI, or friends if that is empty.
+    People(String),
+    Follow { uri: String, on: bool },
     /// Fetch a picture; `kind` only comes back with it.
     Picture { kind: i32, id: String },
     /// Fetch the lyrics of a track by its URI.
@@ -102,6 +106,8 @@ pub enum Event {
     Home(Vec<Shelf>),
     /// The home page could not be loaded; why.
     NoHome(String),
+    People { uri: String, profile: Result<Profile, String> },
+    Followed { uri: String, on: bool },
     /// A new list is being shown. `context` is empty for the queue.
     List { title: String, context: String },
     Rows(Vec<Row>),
@@ -119,6 +125,8 @@ pub enum Event {
     Repeat(u8),
     /// How the chosen player is doing, for the settings.
     Player(String),
+    /// Whether Soloist is signed in, once that is clear.
+    Paired(bool),
     Quit,
 }
 
@@ -668,6 +676,29 @@ impl Library {
             }
             Cmd::More => self.more.notify_one(),
             Cmd::Home { again } => self.load_home(again),
+            Cmd::People(uri) => {
+                // It takes the place of the home page.
+                self.home_loaded = None;
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    let mut shared = vec![];
+                    if uri.is_empty() {
+                        shared = playlists(&session).await.inspect_err(|e| log::warn!("playlists: {e}")).unwrap_or_default();
+                        shared.retain(|c| c.subtitle == BLEND || c.subtitle == GROUP);
+                    }
+                    let profile = people::load(&session, &uri, shared).await.map_err(|e| format!("This page could not be loaded: {}", e.error));
+                    emit(Event::People { uri, profile });
+                });
+            }
+            Cmd::Follow { uri, on } => {
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    emit(match people::follow(&session, &uri, on).await {
+                        Ok(()) => Event::Followed { uri, on },
+                        Err(e) => Event::Status(format!("That didn't work: {}", e.error)),
+                    });
+                });
+            }
             Cmd::Picture { kind, id } => {
                 let (session, emit, slots) = (self.session.clone(), self.emit.clone(), self.cover_slots.clone());
                 tokio::spawn(async move {
@@ -825,6 +856,11 @@ async fn load_lyrics(session: &Session, uri: &str) -> Result<(bool, Vec<(u32, St
 }
 
 async fn load_playlists(session: Session, emit: Emit) -> Result<(), Error> {
+    emit(Event::Playlists(playlists(&session).await?));
+    Ok(())
+}
+
+async fn playlists(session: &Session) -> Result<Vec<Card>, Error> {
     let mut playlists = Vec::new();
     let mut from = 0;
     loop {
@@ -836,9 +872,11 @@ async fn load_playlists(session: Session, emit: Emit) -> Result<(), Error> {
             break;
         }
     }
-    emit(Event::Playlists(playlists));
-    Ok(())
+    Ok(playlists)
 }
+
+const BLEND: &str = "Blend";
+const GROUP: &str = "Group playlist";
 
 /// The root list also holds folder markers, which have no name to show.
 fn playlists_in(list: &SelectedListContent) -> Vec<Card> {
@@ -856,7 +894,13 @@ fn playlists_in(list: &SelectedListContent) -> Vec<Card> {
             };
             Card {
                 title: meta.attributes.name().to_owned(),
-                subtitle: if meta.owner_username() == "spotify" { "Playlist · Spotify".into() } else { "Playlist".into() },
+                subtitle: match &meta.attributes {
+                    a if a.format() == "blend" => BLEND,
+                    a if a.collaborative() => GROUP,
+                    _ if meta.owner_username() == "spotify" => "Playlist · Spotify",
+                    _ => "Playlist",
+                }
+                .into(),
                 uri: item.uri().to_owned(),
                 picture: sized.map(|p| p.url().to_owned()).unwrap_or_else(own),
             }

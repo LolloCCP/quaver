@@ -7,6 +7,7 @@ pub enum Page {
     Queue,
     List { title: String, uri: String, picture: String },
     Search(String),
+    People(String),
 }
 
 pub struct History {

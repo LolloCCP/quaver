@@ -8,13 +8,15 @@ mod eq;
 mod history;
 mod instance;
 mod local;
+mod people;
 mod sequence;
 mod settings;
 mod soloist;
+mod updater;
 
 use std::{
     cell::{Cell, RefCell}, collections::HashMap, ffi::c_void, path::PathBuf, rc::Rc,
-    sync::{Arc, atomic::Ordering},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::{Duration, Instant},
 };
 
@@ -91,6 +93,9 @@ struct Ui {
     repaint: slint::Timer,
     /// Whether the next painting is a new look, which fades in.
     new_look: bool,
+    versions: Vec<updater::Version>,
+    /// The version that the next start uses.
+    installed: Option<String>,
     tidy: slint::Timer,
 }
 
@@ -379,6 +384,11 @@ impl Ui {
     }
 
     fn save_soloist_key(&mut self, key: &str) {
+        // What is on the clipboard may be anything.
+        if !(16..=200).contains(&key.len()) || !key.bytes().all(|b| b.is_ascii_graphic()) {
+            self.app.set_player_note("That doesn't look like a key. Copy it on Spotify's page and try again.".into());
+            return;
+        }
         match std::fs::write(soloist::Setup::key_file(&self.data_dir), key) {
             Ok(()) => {
                 self.show_soloist();
@@ -611,6 +621,54 @@ impl Ui {
         }
     }
 
+    fn show_shelves(&mut self, shelves: Vec<backend::Shelf>) {
+        self.shelves.clear();
+        let mut shown = Vec::new();
+        for shelf in shelves {
+            let cards = shelf.cards.into_iter().map(|c| {
+                let round = c.uri.starts_with("spotify:artist:") || c.subtitle == people::PROFILE;
+                card(c, if round { 2 } else { 1 })
+            });
+            let cards = Rc::new(VecModel::from(cards.collect::<Vec<_>>()));
+            shown.push(Shelf { title: shelf.title.into(), cards: cards.clone().into() });
+            self.shelves.push(cards);
+        }
+        self.app.set_shelves(ModelRc::new(VecModel::from(shown)));
+    }
+
+    fn show_versions(&self, note: &str) {
+        let app = &self.app;
+        app.set_version_chosen(!self.shared.lock().version.is_empty());
+        app.set_update_note(note.into());
+        app.set_versions(ModelRc::new(VecModel::from_iter(self.versions.iter().map(|v| Version {
+            tag: v.tag.as_str().into(),
+            about: v.about.as_str().into(),
+            used: self.installed.as_ref() == Some(&v.tag),
+        }))));
+    }
+
+    fn install(&mut self, tag: String) {
+        self.app.set_updating(true);
+        self.show_versions(&format!("Getting {tag}…"));
+        std::thread::spawn(move || {
+            let done = updater::install(&tag);
+            let _ = slint::invoke_from_event_loop(move || with_ui(|ui| {
+                ui.app.set_updating(false);
+                if let Err(e) = done {
+                    return ui.show_versions(&format!("{tag} could not be installed: {e}"));
+                }
+                // Choosing the newest means going on with what is newest.
+                let newest = ui.versions.first().is_some_and(|v| v.tag == tag);
+                ui.change_settings(|s| s.version = if newest { String::new() } else { tag.clone() });
+                let note = format!("{tag} is ready. It is used from the next start.");
+                ui.installed = Some(tag);
+                ui.app.set_update_ready(true);
+                ui.toast(&note);
+                ui.show_versions(&note);
+            }));
+        });
+    }
+
     fn handle(&mut self, event: Event) {
         let app = &self.app;
         match event {
@@ -621,6 +679,7 @@ impl Ui {
                 app.set_message(if message.is_empty() { "Spotify Premium is required.".into() } else { message.into() });
             }
             Event::Connecting(message) => {
+                app.set_soloist_paired(false);
                 app.set_ready(false);
                 app.set_need_login(false);
                 app.set_busy(true);
@@ -651,24 +710,28 @@ impl Ui {
                 app.set_blocked(true);
             }
             Event::Playlists(list) => self.playlists.set_vec(list.into_iter().map(|c| card(c, SMALL)).collect::<Vec<_>>()),
+            // Came too late: another page is shown, and home is loaded again when it is opened.
+            Event::Home(_) | Event::NoHome(_) if !app.get_people_title().is_empty() => {}
+            Event::People { uri, .. } if app.get_people_title().is_empty() || app.get_people_uri() != uri.as_str() => {}
+            Event::People { profile: Err(e), .. } => app.set_home_note(e.into()),
+            Event::People { profile: Ok(profile), .. } => {
+                app.set_people_title(profile.title.into());
+                app.set_follow(profile.followed.map_or(0, |f| 1 + f as i32));
+                app.set_home_note(if profile.shelves.is_empty() { "Nothing to see here." } else { "" }.into());
+                self.show_shelves(profile.shelves);
+            }
+            Event::Followed { uri, on } => {
+                if app.get_people_uri() == uri.as_str() {
+                    app.set_follow(1 + on as i32);
+                }
+            }
             Event::Home(shelves) => {
                 app.set_home_note("".into());
                 app.set_greeting(greeting(local_hour()).into());
                 let mut shelves = shelves.into_iter();
                 let tiles = shelves.next().map(|s| s.cards).unwrap_or_default();
                 self.tiles.set_vec(tiles.into_iter().take(8).map(|c| card(c, SMALL)).collect::<Vec<_>>());
-                self.shelves.clear();
-                let mut shown = Vec::new();
-                for shelf in shelves {
-                    let cards = shelf.cards.into_iter().map(|c| {
-                        let kind = if c.uri.starts_with("spotify:artist:") { 2 } else { 1 };
-                        card(c, kind)
-                    });
-                    let cards = Rc::new(VecModel::from(cards.collect::<Vec<_>>()));
-                    shown.push(Shelf { title: shelf.title.into(), cards: cards.clone().into() });
-                    self.shelves.push(cards);
-                }
-                app.set_shelves(ModelRc::new(VecModel::from(shown)));
+                self.show_shelves(shelves.collect());
             }
             Event::NoHome(note) => app.set_home_note(note.into()),
             Event::List { title, context } => {
@@ -774,6 +837,7 @@ impl Ui {
                     self.toast(&note);
                 }
             }
+            Event::Paired(paired) => app.set_soloist_paired(paired),
             Event::Quit => {
                 self.save_settings();
                 let _ = slint::quit_event_loop();
@@ -1047,6 +1111,7 @@ fn media_controls(app: &App, tx: UnboundedSender<Cmd>) -> Option<MediaControls> 
 
 fn main() -> Result<(), slint::PlatformError> {
     env_logger::init();
+    updater::wait();
     let Some(instance) = instance::claim(r"Local\Quaver") else { return Ok(()) };
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return Err("LOCALAPPDATA is not set".into());
@@ -1110,12 +1175,33 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
     app.on_load_home({
-        let (tx, visit) = (tx.clone(), visit.clone());
+        let (tx, visit, app) = (tx.clone(), visit.clone(), app.as_weak());
         move || {
             visit(Page::Home);
+            if let Some(app) = app.upgrade().filter(|app| !app.get_people_title().is_empty()) {
+                app.set_people_title("".into());
+                app.set_home_note("".into());
+                app.set_shelves(Default::default());
+            }
             let _ = tx.send(Cmd::Home { again: false });
         }
     });
+    app.on_people({
+        let (tx, visit, app) = (tx.clone(), visit.clone(), app.as_weak());
+        move |uri| {
+            let Some(app) = app.upgrade() else { return };
+            visit(Page::People(uri.as_str().into()));
+            app.set_settings_open(false);
+            app.set_home_open(true);
+            app.set_people_title(if uri.is_empty() { "Friends" } else { "Profile" }.into());
+            app.set_people_uri(uri.clone());
+            app.set_follow(0);
+            app.set_home_note("".into());
+            app.set_shelves(Default::default());
+            let _ = tx.send(Cmd::People(uri.into()));
+        }
+    });
+    send!(app.on_set_follow(uri, on) Cmd::Follow { uri: uri.into(), on });
     let go = {
         let (history, app) = (history.clone(), app.as_weak());
         move |step: fn(&mut History) -> Option<Page>| {
@@ -1137,6 +1223,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     app.invoke_show_list(uri.as_str().into(), picture.into());
                     app.invoke_open(title.into(), uri.into());
                 }
+                Some(Page::People(uri)) => app.invoke_people(uri.into()),
                 Some(Page::Search(q)) => {
                     app.set_settings_open(false);
                     app.invoke_search(q.into());
@@ -1200,6 +1287,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let (tx, typing, app) = (tx.clone(), typing.clone(), app.as_weak());
         move |q| {
             typing.stop();
+            if let (Some(uri), Some(app)) = (people::linked(&q), app.upgrade()) {
+                app.invoke_people(uri.into());
+                return;
+            }
             visit(Page::Search(q.as_str().into()));
             if let Some(app) = app.upgrade() {
                 app.set_loading(true);
@@ -1354,7 +1445,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let _ = slint::invoke_from_event_loop(move || with_ui(|ui| {
                 ui.app.set_downloading(false);
                 ui.app.set_player_note(match done {
-                    Ok(()) => "Soloist is here. Now add your key.".into(),
+                    Ok(()) => "".into(),
                     Err(e) => format!("Soloist could not be downloaded: {e}").into(),
                 });
                 ui.show_soloist();
@@ -1384,6 +1475,16 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.show_themes();
             ui.show_soloist();
         }));
+    });
+    app.on_open_spotify(|| open("spotify:".as_ref()));
+    app.set_version(updater::CURRENT.unwrap_or_default().into());
+    app.on_use_version(|tag| with_ui(|ui| ui.install(tag.into())));
+    app.on_restart({
+        let tx = tx.clone();
+        move || {
+            RESTART.store(true, Ordering::Relaxed);
+            let _ = tx.send(Cmd::Quit);
+        }
     });
     app.on_soloist_get_key(|| open("https://developer.spotify.com/dashboard/soloist".as_ref()));
     app.on_set_motion(|on| with_ui(|ui| ui.change_settings(|s| s.motion = on)));
@@ -1468,6 +1569,8 @@ fn main() -> Result<(), slint::PlatformError> {
         painting: 0,
         repaint: slint::Timer::default(),
         new_look: false,
+        versions: vec![],
+        installed: updater::CURRENT.map(String::from),
         tidy: slint::Timer::default(),
     };
     ui.show_settings(&settings);
@@ -1476,6 +1579,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_look(look, true);
     UI.set(Some(ui));
 
+    look_for_versions(&data_dir);
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         let emit: backend::Emit = Arc::new(|event| {
@@ -1488,7 +1592,32 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let result = slint::run_event_loop_until_quit();
     UI.set(None);
+    if RESTART.load(Ordering::Relaxed) {
+        updater::restart();
+    }
     result
+}
+
+/// Whether to start again after quitting.
+static RESTART: AtomicBool = AtomicBool::new(false);
+
+/// Also gets the version that is wanted, if it is another one.
+fn look_for_versions(data_dir: &std::path::Path) {
+    let data_dir = data_dir.to_owned();
+    std::thread::spawn(move || {
+        let versions = updater::versions(&data_dir);
+        let _ = slint::invoke_from_event_loop(move || with_ui(|ui| {
+            match versions {
+                Ok(versions) => ui.versions = versions,
+                Err(e) => return ui.show_versions(&format!("Could not look for new versions: {e}")),
+            }
+            let chosen = ui.shared.lock().version.clone();
+            match updater::wanted(&ui.versions, &chosen, updater::CURRENT).map(|v| v.tag.clone()) {
+                Some(tag) => ui.install(tag),
+                None => ui.show_versions(if ui.versions.is_empty() { "No versions are published yet." } else { "" }),
+            }
+        }));
+    });
 }
 
 #[cfg(test)]

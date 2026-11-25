@@ -1,9 +1,9 @@
 import { ListView } from "std-widgets.slint";
 import { Theme, Custom, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
 import { Card, Shelf, HomeView, LibraryItem } from "home.slint";
-import { ThemeCard, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
+import { ThemeCard, Version, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
 
-export { Theme, Custom, Scene, ThemeCard, TrackRow, Card, Shelf }
+export { Theme, Custom, Scene, ThemeCard, Version, TrackRow, Card, Shelf }
 
 export component App inherits Window {
     title: root.track-title == "" ? "Quaver" : root.track-title + " · " + root.track-artist;
@@ -90,7 +90,24 @@ export component App inherits Window {
     callback copy-jam-link();
     in property <bool> soloist-here;
     in property <bool> soloist-has-key;
+    in property <bool> soloist-paired;
     in property <bool> downloading;
+    callback open-spotify();
+    // Empty for what was built from source.
+    in property <string> version;
+    in property <[Version]> versions;
+    in property <bool> version-chosen;
+    in property <bool> updating;
+    in property <bool> update-ready;
+    in property <string> update-note;
+    callback use-version(string);
+    callback restart();
+    // Whose page takes the place of home; the title is empty for none, the URI for one's own.
+    in-out property <string> people-title;
+    in-out property <string> people-uri;
+    in property <int> follow;
+    callback people(string);
+    callback set-follow(string, bool);
     in property <[ThemeCard]> themes;
     in property <string> theme;
     in property <bool> glass-theme: true;
@@ -180,6 +197,10 @@ export component App inherits Window {
         if (picture != "") { root.need-picture(3, picture); }
     }
     function open-card(card: Card) {
+        if (card.kind == 2 && card.subtitle == "Profile") {
+            root.people(card.uri);
+            return;
+        }
         root.show-list(card.uri, card.picture-id);
         if (card.uri == "liked" || card.title == "Liked Songs") { root.liked(); } else { root.open(card.title, card.uri); }
     }
@@ -317,7 +338,8 @@ export component App inherits Window {
                     VerticalLayout { alignment: center; Icon { glyph: "\u{e72a}"; label: "Forward"; enabled: root.can-go-forward; clicked => { root.go-forward(); } } }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                VerticalLayout { alignment: center; Icon { glyph: "\u{e80f}"; label: "Home"; on: root.home-open && !root.settings-open; size: 18px; clicked => { root.go-home(); } } }
+                VerticalLayout { alignment: center; Icon { glyph: "\u{e80f}"; label: "Home"; on: root.home-open && !root.settings-open && root.people-title == ""; size: 18px; clicked => { root.go-home(); } } }
+                if !root.offline: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: "Friends"; on: root.home-open && !root.settings-open && root.people-title != ""; size: 18px; clicked => { root.people(""); } } }
                 VerticalLayout {
                     width: min(480px, root.width * 0.42);
                     alignment: center;
@@ -390,14 +412,17 @@ export component App inherits Window {
                                 width: 100%;
                                 height: 100%;
                                 animate y { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                                greeting: root.greeting;
+                                greeting: root.people-title != "" ? root.people-title : root.greeting;
+                                hint: root.people-title != "" && root.people-uri == "" ? "To find someone, paste the link to their profile into the search box." : "";
+                                follow: root.people-title != "" ? root.follow : 0;
+                                set-follow(on) => { root.set-follow(root.people-uri, on); }
                                 note: root.home-note;
-                                tiles: root.tiles;
+                                tiles: root.people-title != "" ? [] : root.tiles;
                                 shelves: root.shelves;
                                 open(c) => { root.open-card(c); }
                                 play(uri) => { root.play-list(uri); }
                                 need-picture(kind, id) => { root.need-picture(kind, id); }
-                                retry => { root.home-note = ""; root.retry-home(); }
+                                retry => { root.home-note = ""; if (root.people-title != "") { root.people(root.people-uri); } else { root.retry-home(); } }
                             }
                             list := ListView {
                                 visible: root.list-shown;
@@ -447,6 +472,16 @@ export component App inherits Window {
                                 soloist-about => { root.soloist-about(); }
                                 soloist-here: root.soloist-here;
                                 soloist-has-key: root.soloist-has-key;
+                                soloist-paired: root.soloist-paired;
+                                open-spotify => { root.open-spotify(); }
+                                version: root.version;
+                                versions: root.versions;
+                                version-chosen: root.version-chosen;
+                                updating: root.updating;
+                                update-ready: root.update-ready;
+                                update-note: root.update-note;
+                                use-version(v) => { root.use-version(v); }
+                                restart => { root.restart(); }
                                 downloading: root.downloading;
                                 themes: root.themes;
                                 theme: root.theme;

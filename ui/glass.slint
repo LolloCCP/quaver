@@ -615,6 +615,11 @@ export component SecretBox inherits Rectangle {
             accepted => { root.save(); }
         }
     }
+    public function paste() {
+        input.select-all();
+        input.paste();
+        root.save();
+    }
     public function save() {
         if (input.text != "") {
             root.accepted(input.text);

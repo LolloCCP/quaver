@@ -9,11 +9,20 @@ A small native Spotify client for Windows: Rust, Slint (software rendered, no br
 
 ## Use
 
-Needs Windows, Spotify Premium and [Rust](https://rustup.rs) with the Visual C++ build tools.
+Needs Windows and Spotify Premium. Get `quaver-setup.exe` from the
+[latest release](https://github.com/LolloCCP/quaver/releases/latest); it installs for you alone, without admin rights. The
+installer isn't signed, so Windows may warn about it: "More info", then "Run anyway".
+
+Quaver looks for a new version on GitHub when it starts and uses it from the next start. Settings > Updates goes back to
+an older one and stays there.
+
+To build it yourself you need [Rust](https://rustup.rs) with the Visual C++ build tools:
 
 - Build: `cargo build --release`, then run `target\release\quaver.exe`
 - Test: `cargo test`
 - Logs: set `RUST_LOG=info` and run a debug build (`cargo run`)
+
+Every push to `main` becomes a release (`.github/workflows/release.yml`).
 
 Closing the window keeps it in the tray; quit from the tray icon.
 
@@ -33,6 +42,11 @@ every song"). That uses undocumented lines of Soloist's settings, which an updat
 
 Lists start through Spotify Connect's own, undocumented, commands, so the Spotify app sees the same list and can go on
 with it; without them only the chosen song plays. Pressing play in Quaver takes over from another device.
+
+## Friends
+
+The people button shows what friends listen to, your blends and group playlists, and whom you follow; paste the link to a
+profile into the search box to open it, see its public playlists and follow it. Blends are made in the Spotify app.
 
 ## Offline
 

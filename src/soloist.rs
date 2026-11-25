@@ -78,8 +78,7 @@ pub fn download(data_dir: &Path) -> Result<(), String> {
     let (zip, fresh, dir) = (data_dir.join("soloist.zip"), data_dir.join("soloist-new"), Setup::dir(data_dir));
     let _ = std::fs::remove_dir_all(&fresh);
     std::fs::create_dir_all(&fresh).map_err(|e| e.to_string())?;
-    // Both programs are part of Windows; curl checks certificates and only follows https.
-    run_tool("curl.exe", &["--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-time", "900", "--output"], &[zip.as_os_str(), DOWNLOAD.as_ref()])?;
+    fetch(DOWNLOAD, &zip)?;
     let unpacked = run_tool("tar.exe", &["-xf"], &[zip.as_os_str(), "-C".as_ref(), fresh.as_os_str()]);
     let _ = std::fs::remove_file(&zip);
     unpacked?;
@@ -88,6 +87,11 @@ pub fn download(data_dir: &Path) -> Result<(), String> {
     }
     std::fs::rename(&fresh, &dir).map_err(|e| e.to_string())?;
     Setup::find_exe(data_dir).map(|_| ()).ok_or_else(|| "There was no soloist.exe in the download".into())
+}
+
+/// The programs used here are part of Windows; curl checks certificates and only follows https.
+pub fn fetch(url: &str, to: &Path) -> Result<(), String> {
+    run_tool("curl.exe", &["--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-time", "900", "--output"], &[to.as_os_str(), url.as_ref()])
 }
 
 fn run_tool(program: &str, options: &[&str], rest: &[&std::ffi::OsStr]) -> Result<(), String> {
@@ -535,6 +539,7 @@ impl Player {
                 if news {
                     self.unpaired = (!paired).then(Instant::now);
                     if paired {
+                        (self.emit)(Event::Paired(true));
                         (self.emit)(Event::Player("Connected. Soloist plays the sound.".into()));
                     }
                 }
@@ -574,6 +579,7 @@ impl Player {
 
     fn ask_to_pair(&mut self, patience: Duration) {
         if self.unpaired.take_if(|since| since.elapsed() >= patience).is_some() {
+            (self.emit)(Event::Paired(false));
             (self.emit)(Event::Player("Almost there: open Spotify on your phone or computer, on this network, and pick “Quaver” as the device. Once is enough.".into()));
         }
     }

@@ -27,11 +27,13 @@ pub struct Settings {
     pub music: String,
     pub eq_on: bool,
     pub eq: [f32; BANDS],
+    /// The release to stay on; empty for always the newest.
+    pub version: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS] }
+        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new() }
     }
 }
 
@@ -49,10 +51,10 @@ impl Settings {
     }
 
     fn text(&self) -> String {
-        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq } = self;
+        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version } = self;
         let custom = custom.map(hex).join(",");
         let eq = eq.map(|g| g.to_string()).join(",");
-        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\n")
+        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\n")
     }
 
     fn parse(text: &str) -> Self {
@@ -73,6 +75,7 @@ impl Settings {
                 "soloist" => s.soloist = flag(s.soloist),
                 "offline" => s.offline = flag(s.offline),
                 "music" => s.music = value.to_owned(),
+                "version" => s.version = value.trim().to_owned(),
                 "eq_on" => s.eq_on = flag(s.eq_on),
                 "tint" => s.tint = value.parse().ok().filter(|t: &f32| t.is_finite()).unwrap_or(s.tint).clamp(MIN_TINT, 0.85),
                 "eq" => {
@@ -127,7 +130,7 @@ mod tests {
 
     #[test]
     fn what_is_saved_is_what_loads() {
-        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, ..Default::default() };
+        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, version: "v0.1.2".into(), ..Default::default() };
         s.eq[3] = -4.5;
         assert_eq!(Settings::parse(&s.text()), s);
     }
