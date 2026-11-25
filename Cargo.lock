@@ -4685,6 +4685,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "socket2",
  "souvlaki",
  "tokio",
  "tokio-tungstenite",

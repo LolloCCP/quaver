@@ -2,8 +2,10 @@
 //! (developer.spotify.com/documentation/soloist/reference/websocket-api).
 
 use std::{
+    ffi::c_void,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -19,6 +21,7 @@ use tokio::{
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
 use crate::{
+    announce::{self, Announcer},
     backend::{Cmd, Emit, End, Event, Jam, Library},
     sequence::{Sequence, Started},
 };
@@ -103,14 +106,62 @@ fn output() -> Option<String> {
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateJobObjectW(security: *mut c_void, name: *const u16) -> *mut c_void;
+    fn SetInformationJobObject(job: *mut c_void, class: i32, info: *const JobLimits, size: u32) -> i32;
+    fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
+}
+
+/// JOBOBJECT_EXTENDED_LIMIT_INFORMATION, of which only the flags are used.
+#[repr(C, align(8))]
+struct JobLimits {
+    times: [u64; 2],
+    flags: u32,
+    rest: [u32; 31],
+}
+
+/// Puts Soloist in a job that Windows ends together with this program, however that ends.
+fn end_with_us(child: &Child) {
+    const EXTENDED_LIMITS: i32 = 9;
+    const KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    // Never closed on purpose: Windows does that when this program is gone.
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+        let limits = JobLimits { times: [0; 2], flags: KILL_ON_JOB_CLOSE, rest: [0; 31] };
+        let set = SetInformationJobObject(job, EXTENDED_LIMITS, &limits, size_of::<JobLimits>() as u32);
+        if job.is_null() || set == 0 { 0 } else { job as usize }
+    });
+    let assigned = child.raw_handle().is_some_and(|process| job != 0 && unsafe { AssignProcessToJobObject(job as *mut c_void, process) } != 0);
+    if !assigned {
+        log::warn!("soloist may outlive quaver: {}", std::io::Error::last_os_error());
+    }
+}
+
+/// The port on which a Soloist that isn't signed in waits for the Spotify app.
+fn pairing_port(pid: u32) -> Option<u16> {
+    use std::os::windows::process::CommandExt;
+    let system = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32");
+    let output = std::process::Command::new(system.join("netstat.exe")).args(["-ano", "-p", "TCP"]).creation_flags(CREATE_NO_WINDOW).output().ok()?;
+    port_of(&String::from_utf8_lossy(&output.stdout), pid)
+}
+
+/// The words in netstat's list are translated, its numbers aren't.
+fn port_of(netstat: &str, pid: u32) -> Option<u16> {
+    netstat.lines().find_map(|line| {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        let [_, local, remote, .., owner] = fields[..] else { return None };
+        (remote == "0.0.0.0:0" && owner.parse() == Ok(pid)).then(|| local.strip_prefix("0.0.0.0:")?.parse().ok())?
+    })
+}
+
 async fn launch(setup: &Setup, data_dir: &Path) -> Result<(Child, Socket), Error> {
     let state = data_dir.join("soloist-state");
     std::fs::create_dir_all(&state)?;
     let port_file = state.join("ws.port");
     // Left behind if Soloist was killed; it would point at a port that is gone.
     let _ = std::fs::remove_file(&port_file);
-    // shortcut: if Quaver itself crashes, Soloist keeps running until it is ended in Task Manager,
-    // put both in a Windows job object if that happens.
     let mut child = Command::new(&setup.exe)
         .args(["--device-name", "Quaver", "--ws", "127.0.0.1:0", "--cache-size", "500", "--api-key", &setup.key])
         .arg("--data-dir")
@@ -123,6 +174,7 @@ async fn launch(setup: &Setup, data_dir: &Path) -> Result<(Child, Socket), Error
         .creation_flags(CREATE_NO_WINDOW)
         .kill_on_drop(true)
         .spawn()?;
+    end_with_us(&child);
     for _ in 0..150 {
         if let Some(status) = child.try_wait()? {
             return Err(Error::unavailable(match status.code() {
@@ -167,16 +219,18 @@ pub async fn run(
     emit(Event::Ready);
     library.load_start();
     let mut session_check = tokio::time::interval(Duration::from_secs(5));
+    let mut announcer: Option<Announcer> = None;
     let mut output_check = tokio::time::interval(OUTPUT_CHECK);
     let mut jam_check = tokio::time::interval(JAM_CHECK);
     let (jam_tx, mut jams) = mpsc::unbounded_channel();
-    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None };
-    player.set_volume(cache.volume().unwrap_or(u16::MAX / 2)).await;
+    let mut player = Player { socket, emit: emit.clone(), sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2 };
+    player.volume = cache.volume().unwrap_or(u16::MAX / 2);
 
     loop {
         tokio::select! {
             _ = session_check.tick() => if library.session.is_invalid() { return Ok(End::Lost) },
             _ = output_check.tick() => {
+                announcer = if player.paired == Some(true) { None } else { announced(announcer.take(), child.id()).await };
                 // Soloist stays on the output it started with and can't be told to change it.
                 let now = tokio::task::spawn_blocking(output).await.ok().flatten();
                 if now.is_none() || now == playing_on {
@@ -189,7 +243,7 @@ pub async fn run(
                 }
                 let (new_child, socket) = launch(setup, data_dir).await?;
                 (child, player.socket) = (new_child, socket);
-                player.set_volume(cache.volume().unwrap_or(u16::MAX / 2)).await;
+                player.paired = None;
             }
             _ = jam_check.tick() => {
                 let (session, tx) = (library.session.clone(), jam_tx.clone());
@@ -260,6 +314,18 @@ pub async fn run(
     }
 }
 
+/// Keeps the announcement up to date: the network may change, and Soloist picks a new port each time.
+async fn announced(old: Option<Announcer>, soloist: Option<u32>) -> Option<Announcer> {
+    let soloist = soloist?;
+    let (address, port) = tokio::task::spawn_blocking(move || Some((announce::local_address()?, pairing_port(soloist)?))).await.ok()??;
+    if old.as_ref().is_some_and(|a| (a.address, a.port) == (address, port)) {
+        return old;
+    }
+    // The old one has to let go of the port first.
+    drop(old);
+    Announcer::start(address, port).inspect_err(|e| log::warn!("announce: {e}")).ok()
+}
+
 struct Player {
     socket: Socket,
     emit: Emit,
@@ -277,6 +343,8 @@ struct Player {
     resume: Option<(String, u32, bool)>,
     /// Where to move to once the resumed song plays, and whether it should.
     catch_up: Option<(u32, bool)>,
+    /// What the volume should be; Soloist starts with its own.
+    volume: u16,
 }
 
 fn now_ms() -> u64 {
@@ -347,6 +415,7 @@ impl Player {
     }
 
     async fn set_volume(&mut self, volume: u16) {
+        self.volume = volume;
         (self.emit)(Event::Volume(volume));
         self.send("set_volume", json!({ "volume": (volume as u32 * 100 + 32767) / 65535 })).await;
     }
@@ -408,10 +477,15 @@ impl Player {
         match event["type"].as_str().unwrap_or_default() {
             "auth_state" => {
                 let paired = event["logged_in"].as_bool().unwrap_or(false);
+                let news = self.paired.replace(paired) != Some(paired);
+                if paired && news {
+                    // Before it is signed in, Soloist refuses this.
+                    self.set_volume(self.volume).await;
+                }
                 if paired {
                     self.resume().await;
                 }
-                if self.paired.replace(paired) != Some(paired) {
+                if news {
                     (self.emit)(Event::Player(if paired {
                         "Connected. Soloist plays the sound.".into()
                     } else {
@@ -593,7 +667,7 @@ mod tests {
         let events = Arc::new(Mutex::new(vec![]));
         let log = events.clone();
         let emit: Emit = Arc::new(move |e| log.lock().unwrap().push(e));
-        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None };
+        let player = Player { socket, emit, sequence: Sequence::default(), track: String::new(), playing: false, position: (0, 0), paired: None, jam: None, outside: vec![], resume: None, catch_up: None, volume: u16::MAX / 2 };
         (player, sent, events)
     }
 
@@ -687,7 +761,7 @@ mod tests {
         p.event(&json!({ "type": "auth_state", "logged_in": false })).await;
         assert_eq!(settled(&sent).await, Vec::<String>::new(), "not before it is signed in");
         p.event(&json!({ "type": "auth_state", "logged_in": true })).await;
-        assert_eq!(settled(&sent).await, ["activate", "play \"a\"", "add_to_queue \"b\""]);
+        assert_eq!(settled(&sent).await, ["set_volume 50", "activate", "play \"a\"", "add_to_queue \"b\""]);
         p.event(&json!({ "type": "playback_changed", "status": "buffering" })).await;
         assert_eq!(settled(&sent).await, Vec::<String>::new(), "still loading");
         p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
@@ -702,6 +776,18 @@ mod tests {
         p.resume().await;
         p.event(&json!({ "type": "playback_changed", "status": "playing" })).await;
         assert_eq!(settled(&sent).await.last().unwrap(), "pause", "what was paused stays paused");
+    }
+
+    #[tokio::test]
+    async fn the_volume_is_set_once_signed_in() {
+        let (mut p, sent, _) = player().await;
+        p.volume = 39068;
+        p.event(&json!({ "type": "auth_state", "logged_in": false })).await;
+        assert_eq!(settled(&sent).await, Vec::<String>::new());
+        for _ in 0..2 {
+            p.event(&json!({ "type": "auth_state", "logged_in": true })).await;
+        }
+        assert_eq!(settled(&sent).await, ["set_volume 60"]);
     }
 
     #[tokio::test]
@@ -731,6 +817,41 @@ mod tests {
         let failed = launch(&Setup { exe, key: "k".into() }, &dir).await.err().expect("must fail");
         assert!(failed.to_string().contains("API key"), "{failed}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_pairing_port_is_found_in_any_language() {
+        let list = "
+Connessioni attive
+
+  Proto  Indirizzo locale  Indirizzo esterno  Stato  PID
+  TCP    127.0.0.1:56734  0.0.0.0:0  LISTENING  12
+  TCP    0.0.0.0:80  0.0.0.0:0  LISTENING  4
+  TCP    10.0.0.1:5000  1.2.3.4:443  ESTABLISHED  12
+  TCP    0.0.0.0:65028  0.0.0.0:0  IN ASCOLTO  12
+";
+        assert_eq!(port_of(list, 12), Some(65028));
+        assert_eq!(port_of(list, 13), None);
+        assert_eq!(port_of("", 12), None);
+    }
+
+    #[tokio::test]
+    async fn a_process_can_be_tied_to_this_one() {
+        // The layout has to be right, or Windows refuses it.
+        assert_eq!(size_of::<JobLimits>(), 144);
+        let mut child = Command::new("ping.exe").args(["-n", "30", "127.0.0.1"]).stdout(Stdio::null()).creation_flags(CREATE_NO_WINDOW).kill_on_drop(true).spawn().unwrap();
+        end_with_us(&child);
+        let in_job = {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn IsProcessInJob(process: *mut c_void, job: *mut c_void, result: *mut i32) -> i32;
+            }
+            let mut result = 0;
+            unsafe { IsProcessInJob(child.raw_handle().unwrap(), std::ptr::null_mut(), &mut result) };
+            result
+        };
+        child.kill().await.unwrap();
+        assert_eq!(in_job, 1);
     }
 
     #[test]
