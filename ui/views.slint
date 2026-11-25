@@ -1,0 +1,312 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Glass, Icon, Pill, Switch, Bar, EqBand, Link, Cover, Transport, Timeline } from "glass.slint";
+
+export struct TrackRow { uri: string, title: string, artist: string, artist-uri: string, album: string, album-uri: string, duration: string, cover-id: string, cover: image, has-cover: bool }
+
+export component Row inherits Rectangle {
+    in property <TrackRow> item;
+    in property <bool> current;
+    callback play();
+    callback enqueue();
+    callback open(string, string);
+    callback need-cover(string);
+    init => { if (!item.has-cover && item.cover-id != "") { root.need-cover(item.cover-id); } }
+    height: 60px;
+    border-radius: 16px;
+    background: root.current ? Theme.selected : touch.has-hover ? Theme.raised : transparent;
+    border-width: focus.has-focus ? 2px : root.current || touch.has-hover ? 1px : 0px;
+    border-color: focus.has-focus ? Theme.accent : Theme.line;
+    accessible-role: list-item;
+    accessible-label: item.title + ", " + item.artist;
+    accessible-action-default => { root.play(); }
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.Return) { root.play(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { double-clicked => { root.play(); } }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 14px;
+        VerticalLayout { alignment: center; Cover { width: 44px; height: 44px; border-radius: 10px; source: item.cover; loaded: item.has-cover; } }
+        VerticalLayout {
+            horizontal-stretch: 6;
+            preferred-width: 0px;
+            min-width: 0px;
+            alignment: center;
+            spacing: 1px;
+            Text { text: item.title; overflow: elide; font-weight: root.current ? 600 : 400; color: root.current ? Theme.accent : Theme.text; }
+            Link { height: 18px; text: item.artist; linked: item.artist-uri != ""; clicked => { root.open(item.artist, item.artist-uri); } }
+        }
+        Link { text: item.album; linked: item.album-uri != ""; preferred-width: 0px; horizontal-stretch: 4; clicked => { root.open(item.album, item.album-uri); } }
+        Text { text: item.duration; width: 44px; horizontal-alignment: right; vertical-alignment: center; color: Theme.dim; }
+        VerticalLayout {
+            alignment: center;
+            Icon { glyph: "\u{e710}"; label: "Add to queue: " + item.title; size: 12px; clicked => { root.enqueue(); } }
+        }
+    }
+}
+
+component Lyrics inherits Rectangle {
+    in property <[string]> lines;
+    in property <int> active;
+    in property <bool> synced;
+    in property <string> note;
+    callback seek(int);
+    clip: true;
+    if root.lines.length == 0: Text { text: root.note; color: Theme.dim; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+    flick := Flickable {
+        width: 100%;
+        height: 100%;
+        // Timed lyrics follow the song; plain ones are scrolled by hand.
+        interactive: !root.synced;
+        content-height: column.preferred-height;
+        animate content-y { duration: 450ms; easing: ease-in-out; }
+        column := VerticalLayout {
+            width: root.width;
+            padding-top: root.synced ? root.height * 0.4 : 8px;
+            padding-bottom: root.synced ? root.height * 0.5 : 8px;
+            spacing: 14px;
+            for line[i] in root.lines: line-area := TouchArea {
+                property <bool> active: root.synced && i == root.active;
+                function center() { if (self.active) { flick.content-y = root.height * 0.4 - self.y; } }
+                // Also covers lyrics that arrive in the middle of a line, or a resize.
+                init => { self.center(); }
+                changed active => { self.center(); }
+                changed y => { self.center(); }
+                height: words.preferred-height;
+                mouse-cursor: root.synced ? MouseCursor.pointer : MouseCursor.default;
+                clicked => { if (root.synced) { root.seek(i); } }
+                words := Text {
+                    width: root.width - 8px;
+                    text: line == "" ? "♪" : line;
+                    wrap: word-wrap;
+                    font-size: root.synced ? 25px : 18px;
+                    font-weight: root.synced ? 700 : 400;
+                    color: !root.synced || line-area.active ? Theme.text : i < root.active ? #ffffff8c : #ffffffb3;
+                }
+            }
+        }
+    }
+}
+
+export component NowPlaying inherits Rectangle {
+    in property <string> title;
+    in property <string> artist;
+    in property <string> album;
+    in property <image> cover;
+    in property <bool> has-cover;
+    in property <bool> playing;
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in property <float> progress;
+    in property <string> elapsed;
+    in property <string> total;
+    in property <bool> lyrics-open;
+    in property <[string]> lyrics;
+    in property <int> lyrics-active;
+    in property <bool> lyrics-synced;
+    in property <string> lyrics-note;
+    callback toggle();
+    callback next();
+    callback prev();
+    callback set-shuffle(bool);
+    callback set-repeat(int);
+    callback seek(float);
+    callback seek-line(int);
+    callback toggle-lyrics();
+    callback close();
+    callback fullscreen();
+    // Controls fade after a moment without the mouse, but never while paused.
+    property <bool> awake: true;
+    property <bool> controls: root.awake || !root.playing;
+    property <length> left: root.lyrics-open ? min(root.width * 0.46, 620px) : root.width;
+    property <length> art: min(root.left - 96px, root.height - 330px, 560px);
+    property <int> moves;
+    property <int> seen-moves;
+    property <length> last-x;
+    property <length> last-y;
+    callback art-resized(length);
+    init => { root.art-resized(root.art); }
+    changed art => { root.art-resized(root.art); }
+
+    Timer {
+        interval: 3s;
+        running: root.awake && root.playing;
+        triggered => {
+            root.awake = root.moves != root.seen-moves;
+            root.seen-moves = root.moves;
+        }
+    }
+    TouchArea {
+        mouse-cursor: root.controls ? MouseCursor.default : MouseCursor.none;
+        // Slint repeats the last position after a relayout, which isn't a real movement.
+        pointer-event(e) => {
+            if (e.kind != PointerEventKind.move || self.mouse-x != root.last-x || self.mouse-y != root.last-y) {
+                root.last-x = self.mouse-x;
+                root.last-y = self.mouse-y;
+                root.moves += 1;
+                root.awake = true;
+            }
+        }
+    }
+    VerticalLayout {
+        x: 0;
+        width: root.left;
+        padding-left: 32px;
+        padding-right: 32px;
+        alignment: center;
+        spacing: 6px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: root.art;
+                height: root.art;
+                border-radius: 24px;
+                drop-shadow-blur: 40px;
+                drop-shadow-offset-y: 14px;
+                drop-shadow-color: #00000080;
+                background: #00000033;
+                Cover { width: 100%; height: 100%; border-radius: 24px; source: root.cover; loaded: root.has-cover; }
+                Image { source: Theme.rim; width: 100%; height: 100%; }
+            }
+        }
+        Rectangle { height: 16px; }
+        Text { text: root.title; font-size: 30px; font-weight: 700; color: Theme.text; horizontal-alignment: center; overflow: elide; }
+        Text { text: root.artist; font-size: 18px; color: Theme.accent; horizontal-alignment: center; overflow: elide; }
+        Text { text: root.album; color: Theme.dim; horizontal-alignment: center; overflow: elide; }
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 14px;
+            Glass {
+                width: min(root.left - 64px, 560px);
+                height: 132px;
+                opacity: root.controls ? 1 : 0;
+                animate opacity { duration: 400ms; }
+                VerticalLayout {
+                    padding: 12px;
+                    alignment: center;
+                    spacing: 8px;
+                    Timeline { progress: root.progress; elapsed: root.elapsed; total: root.total; seek(v) => { root.awake = true; root.seek(v); } }
+                    Transport {
+                        size: 58px;
+                        playing: root.playing;
+                        shuffle: root.shuffle;
+                        repeat: root.repeat;
+                        toggle => { root.awake = true; root.toggle(); }
+                        next => { root.awake = true; root.next(); }
+                        prev => { root.awake = true; root.prev(); }
+                        set-shuffle(on) => { root.awake = true; root.set-shuffle(on); }
+                        set-repeat(m) => { root.awake = true; root.set-repeat(m); }
+                    }
+                }
+            }
+        }
+    }
+    if root.lyrics-open: Lyrics {
+        x: root.left;
+        y: 76px;
+        width: root.width - root.left - 48px;
+        height: root.height - 124px;
+        lines: root.lyrics;
+        active: root.lyrics-active;
+        synced: root.lyrics-synced;
+        note: root.lyrics-note;
+        seek(i) => { root.seek-line(i); }
+    }
+    Glass {
+        x: root.width - 152px;
+        y: 14px;
+        width: 138px;
+        height: 50px;
+        opacity: root.controls ? 1 : 0;
+        animate opacity { duration: 400ms; }
+        HorizontalLayout {
+            padding: 7px;
+            spacing: 6px;
+            alignment: center;
+            Icon { glyph: "\u{e8bd}"; label: root.lyrics-open ? "Hide lyrics" : "Show lyrics"; on: root.lyrics-open; clicked => { root.toggle-lyrics(); } }
+            Icon { glyph: "\u{e740}"; label: "Full screen"; clicked => { root.fullscreen(); } }
+            Icon { glyph: "\u{e70d}"; label: "Close now playing"; clicked => { root.close(); } }
+        }
+    }
+}
+
+component Section inherits VerticalLayout {
+    in property <string> text;
+    spacing: 10px;
+    padding-bottom: 22px;
+    Text { text: root.text; font-size: 18px; font-weight: 600; color: Theme.text; }
+    @children
+}
+
+export component SettingsView inherits ScrollView {
+    in property <bool> eq-on;
+    in property <[float]> eq;
+    in property <[string]> presets;
+    in property <int> bitrate;
+    in property <bool> normalise;
+    in property <bool> tray;
+    in property <bool> needs-restart;
+    callback set-eq-on(bool);
+    callback set-band(int, float);
+    callback set-preset(int);
+    callback set-bitrate(int);
+    callback set-normalise(bool);
+    callback set-tray(bool);
+    callback set-tint(float);
+    callback logout();
+    property <[string]> labels: ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
+    content-width: self.visible-width;
+    VerticalLayout {
+        padding-left: 8px;
+        padding-right: 22px;
+        padding-top: 4px;
+        Section {
+            text: "Equalizer";
+            Switch { text: "Use the equalizer"; note: "Boosts turn the overall level down, so nothing clips"; checked: root.eq-on; toggled(on) => { root.set-eq-on(on); } }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                for name[i] in root.presets: Pill { quiet: true; text: name; clicked => { root.set-preset(i); } }
+            }
+            HorizontalLayout {
+                height: 210px;
+                opacity: root.eq-on ? 1 : 0.5;
+                for gain[i] in root.eq: EqBand { horizontal-stretch: 1; gain: gain; label: root.labels[i]; commit(v) => { root.set-band(i, v); } }
+            }
+        }
+        Section {
+            text: "Playback";
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "Streaming quality"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                for rate in [96, 160, 320]: Pill { quiet: true; text: rate + " kbps"; selected: root.bitrate == rate; clicked => { root.set-bitrate(rate); } }
+            }
+            Switch { text: "Same volume for every song"; checked: root.normalise; toggled(on) => { root.set-normalise(on); } }
+            if root.needs-restart: Text { text: "Quality and volume changes apply the next time Quaver starts."; color: Theme.accent; font-size: 12px; }
+        }
+        Section {
+            text: "Appearance";
+            HorizontalLayout {
+                spacing: 16px;
+                height: 40px;
+                Text { text: "Glass"; color: Theme.text; vertical-alignment: center; }
+                Text { text: "Clear"; color: Theme.dim; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; horizontal-alignment: right; }
+                VerticalLayout { alignment: center; Bar { width: 180px; live: true; label: "Glass darkness"; value: (Theme.tint - 0.25) / 0.6; commit(v) => { root.set-tint(0.25 + v * 0.6); } } }
+                Text { text: "Dark"; color: Theme.dim; font-size: 12px; vertical-alignment: center; }
+            }
+        }
+        Section {
+            text: "Window";
+            Switch { text: "Keep playing when the window is closed"; note: "Quaver stays in the tray"; checked: root.tray; toggled(on) => { root.set-tray(on); } }
+        }
+        Section {
+            text: "Account";
+            HorizontalLayout { alignment: start; Pill { quiet: true; text: "Sign out"; clicked => { root.logout(); } } }
+        }
+    }
+}

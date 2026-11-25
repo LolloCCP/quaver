@@ -1,0 +1,389 @@
+export global Theme {
+    in property <color> accent: #f2a65a;
+    in property <image> rim;
+    in property <float> tint: 0.4;
+    // art.rs tests text contrast on these two, at the clearest tint.
+    out property <color> selected: #ffffff14;
+    out property <color> sheen: #ffffff0d;
+    out property <color> raised: #ffffff14;
+    out property <color> line: #ffffff26;
+    out property <color> track: #ffffff33;
+    out property <color> text: #f9f6f2;
+    out property <color> dim: #d2cbc4;
+    out property <color> ink: #14110f;
+    out property <string> icons: "Segoe Fluent Icons";
+}
+
+// The blurred cover behind everything. Two layers cross-fade.
+export global Scene {
+    in property <image> a;
+    in property <image> b;
+    in property <bool> show-b;
+    in-out property <length> width;
+    in-out property <length> height;
+}
+
+export component Backdrop inherits Rectangle {
+    Image { source: Scene.a; width: 100%; height: 100%; image-fit: fill; }
+    Image {
+        source: Scene.b;
+        width: 100%;
+        height: 100%;
+        image-fit: fill;
+        opacity: Scene.show-b ? 1 : 0;
+        animate opacity { duration: 700ms; easing: ease-in-out; }
+    }
+}
+
+// A lens over the backdrop: magnified around its own center, tinted, with a lit rim.
+export component Glass inherits Rectangle {
+    in property <float> zoom: 1.5;
+    in property <float> tint: Theme.tint;
+    border-radius: 24px;
+    drop-shadow-blur: 28px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: #00000066;
+    background: #101014;
+    Rectangle {
+        clip: true;
+        border-radius: root.border-radius;
+        Backdrop {
+            width: Scene.width * root.zoom;
+            height: Scene.height * root.zoom;
+            x: root.width / 2 - (root.absolute-position.x + root.width / 2) * root.zoom;
+            y: root.height / 2 - (root.absolute-position.y + root.height / 2) * root.zoom;
+        }
+        Rectangle { background: rgba(8, 8, 14, root.tint); }
+        Rectangle { y: 0; height: min(root.height, 120px); background: @linear-gradient(180deg, Theme.sheen 0%, #ffffff00 100%); }
+        @children
+    }
+    Image { source: Theme.rim; width: 100%; height: 100%; }
+}
+
+export component KeyFocus inherits FocusScope {
+    callback activated();
+    focus-on-click: false;
+    key-pressed(e) => {
+        if (e.text == " " || e.text == Key.Return) { root.activated(); return accept; }
+        return reject;
+    }
+}
+
+export component Icon inherits TouchArea {
+    in property <string> glyph;
+    in property <string> label;
+    in property <bool> on;
+    in property <length> size: 16px;
+    width: 36px;
+    height: 36px;
+    mouse-cursor: pointer;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    Rectangle {
+        border-radius: 18px;
+        background: root.has-hover ? Theme.raised : transparent;
+        border-width: focus.has-focus ? 2px : 0px;
+        border-color: Theme.accent;
+    }
+    focus := KeyFocus { activated => { root.clicked(); } }
+    Text { text: root.glyph; font-family: Theme.icons; font-size: root.size; color: root.on ? Theme.accent : Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+export component Pill inherits TouchArea {
+    in property <string> text;
+    in property <bool> quiet;
+    in property <bool> selected;
+    property <bool> filled: !root.quiet || root.selected;
+    width: label.preferred-width + (root.quiet ? 28px : 44px);
+    height: root.quiet ? 34px : 46px;
+    mouse-cursor: pointer;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+    Rectangle {
+        border-radius: root.height / 2;
+        background: root.filled ? (root.has-hover ? Theme.accent.brighter(15%) : Theme.accent) : (root.has-hover ? #ffffff2e : Theme.raised);
+        border-width: focus.has-focus ? 2px : 1px;
+        border-color: focus.has-focus ? white : Theme.line;
+        Rectangle { x: 1px; y: 1px; width: parent.width - 2px; height: parent.height / 2; border-radius: self.height; background: @linear-gradient(180deg, #ffffff40 0%, #ffffff00 100%); }
+    }
+    focus := KeyFocus { activated => { root.clicked(); } }
+    label := Text { text: root.text; font-weight: 600; color: root.filled ? Theme.ink : Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+export component PlayButton inherits TouchArea {
+    in property <bool> playing;
+    in property <length> size: 44px;
+    width: root.size;
+    height: root.size;
+    mouse-cursor: pointer;
+    accessible-role: button;
+    accessible-label: root.playing ? "Pause" : "Play";
+    accessible-action-default => { root.clicked(); }
+    Rectangle {
+        border-radius: root.size / 2;
+        background: root.has-hover ? Theme.accent.brighter(15%) : Theme.accent;
+        border-width: focus.has-focus ? 3px : 1px;
+        border-color: focus.has-focus ? white : #ffffff66;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: Theme.accent.with-alpha(0.35);
+        Rectangle { x: root.size * 0.15; y: root.size * 0.03; width: 70%; height: 45%; border-radius: self.height / 2; background: @linear-gradient(180deg, #ffffff73 0%, #ffffff00 100%); }
+    }
+    focus := KeyFocus { activated => { root.clicked(); } }
+    Text { text: root.playing ? "\u{e769}" : "\u{e768}"; font-family: Theme.icons; font-size: root.size * 0.42; color: Theme.ink; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+export component Switch inherits TouchArea {
+    in property <string> text;
+    in property <string> note;
+    in property <bool> checked;
+    callback toggled(bool);
+    height: root.note == "" ? 40px : 52px;
+    mouse-cursor: pointer;
+    clicked => { root.toggled(!root.checked); }
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-label: root.text;
+    accessible-action-default => { root.toggled(!root.checked); }
+    focus := KeyFocus { activated => { root.toggled(!root.checked); } }
+    HorizontalLayout {
+        spacing: 16px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text { text: root.text; color: Theme.text; }
+            if root.note != "": Text { text: root.note; color: Theme.dim; font-size: 12px; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 46px;
+                height: 26px;
+                border-radius: 13px;
+                background: root.checked ? Theme.accent : Theme.track;
+                border-width: focus.has-focus ? 2px : 1px;
+                border-color: focus.has-focus ? white : Theme.line;
+                Rectangle {
+                    x: root.checked ? 23px : 3px;
+                    y: 3px;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 10px;
+                    background: @linear-gradient(180deg, #ffffff 0%, #d8d8e0 100%);
+                    animate x { duration: 160ms; easing: ease-out; }
+                }
+            }
+        }
+    }
+}
+
+export component Bar inherits Rectangle {
+    in property <float> value;
+    in property <string> label;
+    in property <bool> live;
+    callback commit(float);
+    property <float> dragged: max(0, min(1, touch.mouse-x / root.width));
+    property <float> shown: touch.pressed ? root.dragged : root.value;
+    height: 20px;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: round(root.value * 100);
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+    accessible-action-increment => { root.commit(min(1, root.value + 0.05)); }
+    accessible-action-decrement => { root.commit(max(0, root.value - 0.05)); }
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.modifiers.control) { return reject; }
+            if (e.text == Key.LeftArrow) { root.commit(max(0, root.value - 0.05)); return accept; }
+            if (e.text == Key.RightArrow) { root.commit(min(1, root.value + 0.05)); return accept; }
+            return reject;
+        }
+    }
+    Rectangle { y: 7px; height: 6px; border-radius: 3px; background: Theme.track; }
+    Rectangle { x: 0; y: 7px; height: 6px; border-radius: 3px; width: root.width * root.shown; background: Theme.accent; }
+    Rectangle {
+        visible: touch.has-hover || touch.pressed || focus.has-focus;
+        x: root.width * root.shown - 8px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: @linear-gradient(180deg, #ffffff 0%, #d8d8e0 100%);
+        border-width: 1px;
+        border-color: #00000033;
+    }
+    touch := TouchArea {
+        moved => { if (root.live) { root.commit(root.dragged); } }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) { root.commit(root.dragged); }
+        }
+    }
+}
+
+// One equalizer band, in dB.
+export component EqBand inherits Rectangle {
+    in property <float> gain;
+    in property <string> label;
+    callback commit(float);
+    property <length> rail: root.height - 44px;
+    property <float> at: 1 - (root.gain + 12) / 24;
+    function pick(y: length) { root.commit(round((12 - max(0, min(1, (y - 22px) / root.rail)) * 24) * 2) / 2); }
+    accessible-role: slider;
+    accessible-label: root.label + " hertz";
+    accessible-value: root.gain;
+    accessible-value-minimum: -12;
+    accessible-value-maximum: 12;
+    accessible-action-increment => { root.commit(min(12, root.gain + 1)); }
+    accessible-action-decrement => { root.commit(max(-12, root.gain - 1)); }
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow) { root.commit(min(12, root.gain + 1)); return accept; }
+            if (e.text == Key.DownArrow) { root.commit(max(-12, root.gain - 1)); return accept; }
+            return reject;
+        }
+    }
+    Text { y: 0; height: 18px; text: (root.gain > 0 ? "+" : "") + root.gain; font-size: 11px; color: root.gain == 0 ? Theme.dim : Theme.accent; horizontal-alignment: center; }
+    Rectangle { y: 22px; width: 6px; height: root.rail; border-radius: 3px; background: Theme.track; }
+    Rectangle {
+        y: 22px + root.rail * min(0.5, root.at);
+        width: 6px;
+        height: root.rail * abs(root.at - 0.5);
+        background: Theme.accent;
+    }
+    Rectangle {
+        y: 22px + root.rail * root.at - 9px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: @linear-gradient(180deg, #ffffff 0%, #d8d8e0 100%);
+        border-width: focus.has-focus ? 3px : 1px;
+        border-color: focus.has-focus ? Theme.accent : #00000033;
+    }
+    Text { y: root.height - 18px; height: 18px; text: root.label; font-size: 11px; color: Theme.dim; horizontal-alignment: center; }
+    touch := TouchArea {
+        moved => { root.pick(touch.mouse-y); }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.pick(touch.mouse-y); }
+        }
+        double-clicked => { root.commit(0); }
+    }
+}
+
+export component SideItem inherits TouchArea {
+    in property <string> text;
+    in property <string> glyph;
+    in property <bool> selected;
+    height: 36px;
+    mouse-cursor: pointer;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    Rectangle {
+        border-radius: 18px;
+        background: root.selected ? Theme.selected : root.has-hover ? Theme.raised : transparent;
+        border-width: focus.has-focus ? 2px : root.selected ? 1px : 0px;
+        border-color: focus.has-focus ? Theme.accent : Theme.line;
+    }
+    focus := KeyFocus { activated => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 10px;
+        if root.glyph != "": Text { text: root.glyph; font-family: Theme.icons; vertical-alignment: center; color: root.selected ? Theme.accent : Theme.text; }
+        Text { text: root.text; vertical-alignment: center; overflow: elide; color: root.selected ? Theme.accent : Theme.text; horizontal-stretch: 1; }
+    }
+}
+
+export component Link inherits TouchArea {
+    in property <string> text;
+    in property <bool> linked;
+    enabled: root.linked;
+    mouse-cursor: root.linked ? MouseCursor.pointer : MouseCursor.default;
+    accessible-role: button;
+    accessible-enabled: root.linked;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    Text { width: 100%; height: 100%; text: root.text; overflow: elide; vertical-alignment: center; color: root.linked && root.has-hover ? Theme.accent : Theme.dim; }
+}
+
+export component Cover inherits Rectangle {
+    in property <image> source;
+    in property <bool> loaded;
+    border-radius: 12px;
+    background: Theme.raised;
+    clip: true;
+    if !root.loaded: Text { text: "\u{e8d6}"; font-family: Theme.icons; font-size: root.width / 3; color: Theme.dim; horizontal-alignment: center; vertical-alignment: center; }
+    Image {
+        source: root.source;
+        width: 100%;
+        height: 100%;
+        image-fit: cover;
+        opacity: root.loaded ? 1 : 0;
+        animate opacity { duration: 250ms; easing: ease-out; }
+    }
+}
+
+export component Transport inherits HorizontalLayout {
+    in property <bool> playing;
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in property <length> size: 44px;
+    callback toggle();
+    callback next();
+    callback prev();
+    callback set-shuffle(bool);
+    callback set-repeat(int);
+    alignment: center;
+    spacing: 10px;
+    VerticalLayout { alignment: center; Icon { glyph: "\u{e8b1}"; label: root.shuffle ? "Turn shuffle off" : "Turn shuffle on"; on: root.shuffle; clicked => { root.set-shuffle(!root.shuffle); } } }
+    VerticalLayout { alignment: center; Icon { glyph: "\u{e892}"; label: "Previous"; clicked => { root.prev(); } } }
+    PlayButton { playing: root.playing; size: root.size; clicked => { root.toggle(); } }
+    VerticalLayout { alignment: center; Icon { glyph: "\u{e893}"; label: "Next"; clicked => { root.next(); } } }
+    VerticalLayout { alignment: center; Icon { glyph: root.repeat == 2 ? "\u{e8ed}" : "\u{e8ee}"; label: root.repeat == 0 ? "Repeat all" : root.repeat == 1 ? "Repeat this song" : "Turn repeat off"; on: root.repeat != 0; clicked => { root.set-repeat(mod(root.repeat + 1, 3)); } } }
+}
+
+export component Timeline inherits HorizontalLayout {
+    in property <float> progress;
+    in property <string> elapsed;
+    in property <string> total;
+    callback seek(float);
+    spacing: 10px;
+    Text { text: root.elapsed; color: Theme.dim; font-size: 12px; width: 44px; horizontal-alignment: right; vertical-alignment: center; }
+    Bar { horizontal-stretch: 1; value: root.progress; label: "Position"; commit(v) => { root.seek(v); } }
+    Text { text: root.total; color: Theme.dim; font-size: 12px; width: 44px; vertical-alignment: center; }
+}
+
+export component SearchBox inherits Rectangle {
+    callback accepted(string);
+    public function take-focus() { input.focus(); }
+    height: 42px;
+    border-radius: 21px;
+    background: input.has-focus ? #ffffff2b : Theme.raised;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.line;
+    Text { x: 16px; width: 18px; text: "\u{e721}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; }
+    Text { x: 44px; visible: input.text == ""; text: "Search songs, artists and albums"; color: Theme.dim; vertical-alignment: center; }
+    Rectangle {
+        x: 44px;
+        width: root.width - 64px;
+        clip: true;
+        input := TextInput {
+            width: 100%;
+            height: 100%;
+            single-line: true;
+            color: Theme.text;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: "Search songs, artists and albums";
+            accepted => { if (self.text != "") { root.accepted(self.text); } }
+        }
+    }
+}

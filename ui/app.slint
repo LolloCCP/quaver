@@ -1,0 +1,340 @@
+import { ListView } from "std-widgets.slint";
+import { Theme, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, SideItem, Cover, Transport, Timeline, SearchBox } from "glass.slint";
+import { TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
+
+export { Theme, Scene, TrackRow }
+export struct Playlist { name: string, uri: string }
+
+export component App inherits Window {
+    title: root.track-title == "" ? "Quaver" : root.track-title + " · " + root.track-artist;
+    icon: @image-url("icon.svg");
+    preferred-width: 1160px;
+    preferred-height: 780px;
+    min-width: 860px;
+    min-height: 560px;
+    background: #101014;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+
+    in property <bool> ready;
+    in property <bool> need-login;
+    in property <bool> busy;
+    in property <string> message;
+    in property <string> status;
+    in property <[Playlist]> playlists;
+    in property <[TrackRow]> rows;
+    in property <string> list-title;
+    in property <string> list-context;
+    in property <bool> loading;
+    in property <bool> has-more;
+    in property <string> track-title;
+    in property <string> track-artist;
+    in property <string> track-album;
+    in property <bool> has-cover;
+    in property <image> cover;
+    in property <image> thumb;
+    in property <bool> playing;
+    in property <float> progress;
+    in property <string> elapsed;
+    in property <string> total;
+    in property <float> volume;
+    in property <bool> shuffle;
+    in property <int> repeat;
+    in-out property <bool> now-playing;
+    in-out property <bool> lyrics-open: true;
+    in property <[string]> lyrics;
+    in property <int> lyrics-active: -1;
+    in property <bool> lyrics-synced;
+    in property <string> lyrics-note;
+    out property <bool> lyrics-visible: root.ready && root.now-playing && root.lyrics-open;
+    in-out property <bool> settings-open;
+    in property <bool> eq-on;
+    in property <[float]> eq;
+    in property <[string]> presets;
+    in property <int> bitrate;
+    in property <bool> normalise;
+    in property <bool> tray;
+    in property <bool> needs-restart;
+
+    callback connect();
+    callback logout();
+    callback liked();
+    callback queue();
+    callback clear-queue();
+    callback open(string, string);
+    callback search(string);
+    callback more();
+    callback play(string);
+    callback enqueue(string);
+    callback need-cover(string);
+    callback toggle();
+    callback next();
+    callback prev();
+    callback seek(float);
+    callback seek-line(int);
+    callback lyrics-wanted();
+    callback set-volume(float);
+    callback set-shuffle(bool);
+    callback set-repeat(int);
+    callback tick();
+    callback toggle-fullscreen();
+    callback leave-fullscreen();
+    callback art-resized(length);
+    callback set-eq-on(bool);
+    callback set-band(int, float);
+    callback set-preset(int);
+    callback set-bitrate(int);
+    callback set-normalise(bool);
+    callback set-tray(bool);
+    callback set-tint(float);
+
+    public function reset-scroll() { list.content-y = 0; }
+
+    init => { Scene.width = root.width; Scene.height = root.height; }
+    changed width => { Scene.width = root.width; }
+    changed height => { Scene.height = root.height; }
+    changed lyrics-visible => { root.lyrics-wanted(); }
+
+    Timer { interval: root.lyrics-visible ? 150ms : 500ms; running: root.playing && root.visible; triggered => { root.tick(); } }
+
+    Backdrop { width: 100%; height: 100%; }
+
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.F11) { root.toggle-fullscreen(); return accept; }
+            if (e.text == Key.Escape) {
+                root.now-playing = false;
+                root.settings-open = false;
+                root.leave-fullscreen();
+                return accept;
+            }
+            if (!root.ready) { return reject; }
+            if (e.text == " ") { root.toggle(); return accept; }
+            if (e.modifiers.control && e.text == Key.RightArrow) { root.next(); return accept; }
+            if (e.modifiers.control && e.text == Key.LeftArrow) { root.prev(); return accept; }
+            if (e.modifiers.control && e.text == "f") { root.now-playing = false; search.take-focus(); return accept; }
+            if (e.modifiers.control && e.text == ",") { root.now-playing = false; root.settings-open = true; return accept; }
+            return reject;
+        }
+
+        if !root.ready: VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Glass {
+                    width: min(560px, root.width - 64px);
+                    VerticalLayout {
+                        padding: 44px;
+                        spacing: 20px;
+                        HorizontalLayout { alignment: center; Image { source: @image-url("icon.svg"); width: 84px; height: 84px; } }
+                        Text { text: "Quaver"; font-size: 38px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
+                        Text { text: root.message; wrap: word-wrap; color: Theme.dim; font-size: 15px; horizontal-alignment: center; }
+                        if !root.busy: HorizontalLayout {
+                            alignment: center;
+                            Pill { text: root.need-login ? "Sign in with Spotify" : "Try again now"; clicked => { root.connect(); } }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.ready && root.now-playing: NowPlaying {
+            width: 100%;
+            height: 100%;
+            title: root.track-title;
+            artist: root.track-artist;
+            album: root.track-album;
+            cover: root.cover;
+            has-cover: root.has-cover;
+            playing: root.playing;
+            shuffle: root.shuffle;
+            repeat: root.repeat;
+            progress: root.progress;
+            elapsed: root.elapsed;
+            total: root.total;
+            lyrics-open: root.lyrics-open;
+            lyrics: root.lyrics;
+            lyrics-active: root.lyrics-active;
+            lyrics-synced: root.lyrics-synced;
+            lyrics-note: root.lyrics-note;
+            toggle => { root.toggle(); }
+            next => { root.next(); }
+            prev => { root.prev(); }
+            set-shuffle(on) => { root.set-shuffle(on); }
+            set-repeat(m) => { root.set-repeat(m); }
+            seek(v) => { root.seek(v); }
+            seek-line(i) => { root.seek-line(i); }
+            toggle-lyrics => { root.lyrics-open = !root.lyrics-open; }
+            close => { root.now-playing = false; root.leave-fullscreen(); }
+            fullscreen => { root.toggle-fullscreen(); }
+            art-resized(size) => { root.art-resized(size); }
+        }
+
+        VerticalLayout {
+            visible: root.ready && !root.now-playing;
+            padding: 14px;
+            spacing: 14px;
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 14px;
+                Glass {
+                    width: 236px;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 4px;
+                        SideItem { text: "Liked Songs"; glyph: "\u{eb51}"; selected: !root.settings-open && root.list-title == self.text; clicked => { root.settings-open = false; root.liked(); } }
+                        SideItem { text: "Up next"; glyph: "\u{e8fd}"; selected: !root.settings-open && root.list-title == self.text; clicked => { root.settings-open = false; root.queue(); } }
+                        Rectangle { height: 14px; }
+                        HorizontalLayout { padding-left: 14px; Text { text: "Playlists"; color: Theme.dim; font-size: 12px; } }
+                        ListView {
+                            vertical-stretch: 1;
+                            for p in root.playlists: SideItem {
+                                text: p.name;
+                                selected: !root.settings-open && root.list-context == p.uri;
+                                clicked => { root.settings-open = false; root.open(p.name, p.uri); }
+                            }
+                        }
+                        SideItem { text: "Settings"; glyph: "\u{e713}"; selected: root.settings-open; clicked => { root.settings-open = !root.settings-open; } }
+                    }
+                }
+                Glass {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 14px;
+                        search := SearchBox { accepted(q) => { root.settings-open = false; root.search(q); } }
+                        HorizontalLayout {
+                            height: 50px;
+                            spacing: 12px;
+                            padding-left: 8px;
+                            Text { text: root.settings-open ? "Settings" : root.list-title; font-size: 32px; font-weight: 600; color: Theme.text; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                            if !root.settings-open && root.list-title == "Up next": VerticalLayout { alignment: center; Pill { quiet: true; text: "Clear queue"; clicked => { root.clear-queue(); } } }
+                            if !root.settings-open && root.rows.length > 0: PlayButton { size: 48px; clicked => { root.play(root.rows[0].uri); } }
+                        }
+                        Rectangle {
+                            vertical-stretch: 1;
+                            list := ListView {
+                                visible: !root.settings-open;
+                                width: 100%;
+                                height: 100%;
+                                scrolled => {
+                                    if (root.has-more && !root.loading && -self.content-y > self.content-height - self.visible-height * 2) { root.more(); }
+                                }
+                                for r in root.rows: Row {
+                                    item: r;
+                                    current: r.title == root.track-title && r.artist == root.track-artist;
+                                    play => { root.play(r.uri); }
+                                    enqueue => { root.enqueue(r.uri); }
+                                    open(name, uri) => { root.open(name, uri); }
+                                    need-cover(id) => { root.need-cover(id); }
+                                }
+                            }
+                            if !root.settings-open && root.rows.length == 0: Text {
+                                text: root.loading ? "Loading…" : root.list-title == "" ? "Pick a playlist, or search for something" : root.status;
+                                color: Theme.dim;
+                                font-size: 16px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.settings-open: SettingsView {
+                                width: 100%;
+                                height: 100%;
+                                eq-on: root.eq-on;
+                                eq: root.eq;
+                                presets: root.presets;
+                                bitrate: root.bitrate;
+                                normalise: root.normalise;
+                                tray: root.tray;
+                                needs-restart: root.needs-restart;
+                                set-eq-on(v) => { root.set-eq-on(v); }
+                                set-band(i, v) => { root.set-band(i, v); }
+                                set-preset(i) => { root.set-preset(i); }
+                                set-bitrate(v) => { root.set-bitrate(v); }
+                                set-normalise(v) => { root.set-normalise(v); }
+                                set-tray(v) => { root.set-tray(v); }
+                                set-tint(v) => { root.set-tint(v); }
+                                logout => { root.settings-open = false; root.logout(); }
+                            }
+                        }
+                        if root.settings-open ? root.status != "" : root.rows.length > 0 && (root.loading || root.status != ""): Text { text: root.loading ? "Loading more…" : root.status; color: Theme.dim; overflow: elide; }
+                    }
+                }
+            }
+            Glass {
+                height: 96px;
+                HorizontalLayout {
+                    padding: 15px;
+                    spacing: 16px;
+                    open-cover := TouchArea {
+                        width: 66px;
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Open now playing";
+                        accessible-action-default => { root.now-playing = true; }
+                        clicked => { root.now-playing = true; }
+                        Cover { source: root.thumb; loaded: root.has-cover; }
+                        Rectangle {
+                            visible: open-cover.has-hover || cover-focus.has-focus;
+                            border-radius: 12px;
+                            background: #00000099;
+                            Text { text: "\u{e740}"; font-family: Theme.icons; font-size: 18px; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        cover-focus := KeyFocus { activated => { root.now-playing = true; } }
+                    }
+                    VerticalLayout {
+                        width: 180px;
+                        alignment: center;
+                        spacing: 2px;
+                        Text { text: root.track-title; color: Theme.text; font-weight: 600; overflow: elide; }
+                        Text { text: root.track-artist; color: Theme.dim; font-size: 12px; overflow: elide; }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Transport {
+                            size: 42px;
+                            playing: root.playing;
+                            shuffle: root.shuffle;
+                            repeat: root.repeat;
+                            toggle => { root.toggle(); }
+                            next => { root.next(); }
+                            prev => { root.prev(); }
+                            set-shuffle(on) => { root.set-shuffle(on); }
+                            set-repeat(m) => { root.set-repeat(m); }
+                        }
+                        Timeline { progress: root.progress; elapsed: root.elapsed; total: root.total; seek(v) => { root.seek(v); } }
+                    }
+                    VerticalLayout { alignment: center; Icon { glyph: "\u{e8bd}"; label: "Open lyrics"; clicked => { root.lyrics-open = true; root.now-playing = true; } } }
+                    HorizontalLayout {
+                        width: 130px;
+                        spacing: 8px;
+                        Text { text: "\u{e767}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; }
+                        VerticalLayout {
+                            alignment: center;
+                            Bar { value: root.volume; label: "Volume"; live: true; commit(v) => { root.set-volume(v); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Tray inherits SystemTrayIcon {
+    icon: @image-url("icon.svg");
+    tooltip: "Quaver";
+    in property <bool> playing;
+    callback show-window();
+    callback toggle();
+    callback next();
+    callback quit();
+    clicked => { root.show-window(); }
+    Menu {
+        MenuItem { title: "Open Quaver"; activated => { root.show-window(); } }
+        MenuItem { title: root.playing ? "Pause" : "Play"; activated => { root.toggle(); } }
+        MenuItem { title: "Next"; activated => { root.next(); } }
+        MenuSeparator {}
+        MenuItem { title: "Quit"; activated => { root.quit(); } }
+    }
+}
