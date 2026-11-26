@@ -62,6 +62,7 @@ export component App inherits Window {
     // Karaoke's cover, drawn in Rust in the chosen style.
     in property <image> stage-art;
     in property <image> stage-extra;
+    in property <image> stage-haze;
     in property <int> stage-style;
     callback set-stage(int);
     callback stage-resized(length);
@@ -325,6 +326,7 @@ export component App inherits Window {
             set-volume(v) => { root.set-volume(v); }
             stage-art: root.stage-art;
             stage-extra: root.stage-extra;
+            stage-haze: root.stage-haze;
             stage-style: root.stage-style;
             set-stage(i) => { root.set-stage(i); }
             stage-resized(size) => { root.stage-resized(size); }

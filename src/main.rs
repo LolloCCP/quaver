@@ -653,6 +653,9 @@ impl Ui {
             3 => (art::jewel(&cover, size, 0.03, gloss), Some(art::reflection(&cover, size, 0.03))),
             _ => (art::jewel(&cover, size, 0.03, gloss), None),
         };
+        let window = self.app.window().size();
+        // Half the screen's pixels is plenty for something this blurred.
+        self.app.set_stage_haze(image(art::haze(&cover, window.width / 2, window.height / 2)));
         self.app.set_stage_art(image(art));
         self.app.set_stage_extra(extra.map(image).unwrap_or_default());
         self.spin();

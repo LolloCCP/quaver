@@ -646,6 +646,26 @@ impl Platter {
     }
 }
 
+/// The cover blurred into soft color, to fill a whole screen behind karaoke. Drawn at the size it
+/// is shown, since the renderer only enlarges pictures by repeating pixels.
+pub fn haze(cover: &Pixels, width: u32, height: u32) -> Pixels {
+    const CELLS: u32 = 10;
+    let small = shrink(cover, CELLS);
+    let (width, height) = (width.max(1), height.max(1));
+    // Fills the screen like a cover-fit picture: the longer side is cut.
+    let scale = CELLS as f32 / width.max(height) as f32;
+    let (ox, oy) = ((CELLS as f32 - width as f32 * scale) / 2., (CELLS as f32 - height as f32 * scale) / 2.);
+    let mut out = Pixels::new(width, height);
+    for (i, pixel) in out.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = ((i as u32 % width) as f32 + 0.5, (i as u32 / width) as f32 + 0.5);
+        let [r, g, b, _] = sample(&small, ox + x * scale, oy + y * scale);
+        // A little ordered noise hides the bands of so smooth a gradient.
+        let noise = [0., 0.5, 0.75, 0.25][(i % 2) + 2 * ((i as u32 / width) as usize % 2)];
+        *pixel = Rgba8Pixel { r: (r + noise) as u8, g: (g + noise) as u8, b: (b + noise) as u8, a: 255 };
+    }
+    out
+}
+
 /// A cover's mirror image below it, fading out.
 pub fn reflection(cover: &Pixels, size: u32, rounding: f32) -> Pixels {
     let source = jewel(cover, size, rounding, 0.);
@@ -845,6 +865,12 @@ mod tests {
             assert_eq!(at(&still, 0, 0).a, 0);
             assert_eq!(at(&still, 50, 50).a, 0);
         }
+        let soft = haze(&cover, 400, 200);
+        assert_eq!((soft.width(), soft.height()), (400, 200));
+        // Red on the left, blue on the right, and smooth between.
+        let row = &soft.as_slice()[100 * 400..101 * 400];
+        assert!(row[0].r > row[0].b && row[399].b > row[399].r, "{:?} {:?}", row[0], row[399]);
+        assert!(row.windows(2).all(|w| (w[0].r as i32 - w[1].r as i32).abs() <= 8), "no hard steps");
         let mirror = reflection(&cover, 64, 0.);
         assert_eq!((mirror.width(), mirror.height()), (64, 22));
         assert!(mirror.as_slice()[0].a > mirror.as_slice()[64 * 21].a);

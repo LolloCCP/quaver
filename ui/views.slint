@@ -217,6 +217,8 @@ component Karaoke inherits Rectangle {
     // Drawn by Rust in the chosen style: the cover or record, and a sleeve or mirror image.
     in property <image> art;
     in property <image> extra;
+    // The cover blurred, drawn by Rust at screen size.
+    in property <image> haze;
     in property <int> art-style;
     in property <bool> controls;
     in property <string> title;
@@ -244,21 +246,25 @@ component Karaoke inherits Rectangle {
         root.started = animation-tick();
         root.gliding = Theme.motion;
     }
-    property <float> k: root.gliding ? min(1, (animation-tick() - root.started) / 850ms) : 1;
+    property <float> k: root.gliding ? min(1, (animation-tick() - root.started) / 500ms) : 1;
     // Eases in and out, so a line neither starts nor stops with a jolt.
     property <float> pos: root.from + (root.to - root.from) * (root.k < 0.5 ? 4 * root.k * root.k * root.k : 1 - pow(2 - 2 * root.k, 3) / 2);
-    Timer { interval: 100ms; running: root.gliding; triggered => { if (animation-tick() - root.started >= 850ms) { root.gliding = false; } } }
+    Timer { interval: 100ms; running: root.gliding; triggered => { if (animation-tick() - root.started >= 500ms) { root.gliding = false; } } }
     background: #040306;
     clip: true;
 
-    if root.has-cover: Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; opacity: 0.12; }
+    if root.has-cover: Image { width: 100%; height: 100%; source: root.haze; image-fit: ImageFit.fill; opacity: 0.3; }
     Image { x: -root.width * 0.25; y: root.height * 0.35; width: root.width * 0.9; height: self.width; source: Theme.glow; colorize: Theme.fill; opacity: 0.32; }
     Image { x: root.width * 0.45; y: -root.width * 0.4; width: root.width * 0.8; height: self.width; source: Theme.glow; colorize: Theme.fill2; opacity: 0.24; }
     Rectangle { background: @radial-gradient(circle, #04030600 0%, #04030699 55%, #040306f2 100%); }
 
     // The cover with what is playing and the controls under it; on a narrow window only the controls, at the bottom.
+    // With the UI hidden, what is under the cover is invisible, so the cover moves down to the middle.
+    property <length> info-height;
     VerticalLayout {
         x: 0;
+        y: root.wide && !root.controls ? (root.info-height + below.height + 12px) / 2 : 0px;
+        animate y { duration: Theme.quick * 3; easing: ease-in-out; }
         width: root.wide ? root.side : root.width;
         height: root.height;
         alignment: root.wide ? LayoutAlignment.center : LayoutAlignment.end;
@@ -295,6 +301,8 @@ component Karaoke inherits Rectangle {
             }
         }
         if root.wide: VerticalLayout {
+            init => { root.info-height = self.height; }
+            changed height => { root.info-height = self.height; }
             padding-top: 22px;
             padding-left: 30px;
             padding-right: 30px;
@@ -310,7 +318,7 @@ component Karaoke inherits Rectangle {
                 for name[i] in ["Cover", "Vinyl", "CD", "Mirror"]: Pill { quiet: true; text: name; selected: root.art-style == i; clicked => { root.set-style(i); } }
             }
         }
-        HorizontalLayout {
+        below := HorizontalLayout {
             alignment: center;
             padding-top: 8px;
             opacity: root.controls ? 1 : 0;
@@ -374,6 +382,7 @@ export component NowPlaying inherits Rectangle {
     callback set-volume(float);
     in property <image> stage-art;
     in property <image> stage-extra;
+    in property <image> stage-haze;
     in property <int> stage-style;
     callback set-stage(int);
     callback stage-resized(length);
@@ -502,6 +511,7 @@ export component NowPlaying inherits Rectangle {
         has-cover: root.has-cover;
         art: root.stage-art;
         extra: root.stage-extra;
+        haze: root.stage-haze;
         art-style: root.stage-style;
         controls: root.controls;
         title: root.title;
