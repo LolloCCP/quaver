@@ -14,7 +14,7 @@ Needs Windows and Spotify Premium. Get `quaverinstaller.exe` from the
 installer isn't signed, so Windows may warn about it: "More info", then "Run anyway".
 
 Quaver looks for a new version on GitHub when it starts and uses it from the next start. Settings > Updates goes back to
-an older one and stays there.
+an older one and stays there, or turns looking off.
 
 To build it yourself you need [Rust](https://rustup.rs) with the Visual C++ build tools:
 
@@ -57,6 +57,19 @@ the equalizer works there. Songs downloaded in the Spotify app are encrypted for
 
 Everything is in `%LOCALAPPDATA%\Quaver`: the login in `credentials.json` ("Sign out" deletes it), the Soloist key in
 `soloist-key.txt` and the settings in `settings.txt`. The login and the key are plain files; don't share that folder.
+
+## Privacy
+
+Quaver has no analytics or tracking. It talks to Spotify, and to GitHub when it starts to look for new versions (off in
+Settings > Updates); [PRIVACY.txt](PRIVACY.txt) has the details, and the installer shows it.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Only what `.github/workflows/release.yml` builds from this repository is signed.
+
+- Author, reviewer and approver: [LolloCCP](https://github.com/LolloCCP)
 
 ## License
 

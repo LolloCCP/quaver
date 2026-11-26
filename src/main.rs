@@ -414,6 +414,7 @@ impl Ui {
         app.set_bitrate(s.bitrate.into());
         app.set_normalise(s.normalise);
         app.set_tray(s.tray);
+        app.set_updates(s.updates);
         app.global::<Theme>().set_motion(s.motion);
         app.set_soloist(s.soloist);
         app.set_offline(s.offline);
@@ -1489,6 +1490,15 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_soloist_get_key(|| open("https://developer.spotify.com/dashboard/soloist".as_ref()));
     app.on_set_motion(|on| with_ui(|ui| ui.change_settings(|s| s.motion = on)));
     app.on_set_tray(|on| with_ui(|ui| ui.change_settings(|s| s.tray = on)));
+    app.on_set_updates({
+        let data_dir = data_dir.clone();
+        move |on| {
+            with_ui(|ui| ui.change_settings(|s| s.updates = on));
+            if on {
+                look_for_versions(&data_dir);
+            }
+        }
+    });
     app.on_set_tint(|tint| with_ui(|ui| ui.change_settings(|s| s.tint = tint.clamp(settings::MIN_TINT, 0.85))));
     app.set_presets(ModelRc::new(VecModel::from(eq::PRESETS.map(|p| p.0.into()).to_vec())));
     app.set_eq(ModelRc::new(VecModel::from(settings.eq.to_vec())));
@@ -1579,7 +1589,10 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_look(look, true);
     UI.set(Some(ui));
 
-    look_for_versions(&data_dir);
+    // Off, nothing is sent to GitHub.
+    if settings.updates {
+        look_for_versions(&data_dir);
+    }
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         let emit: backend::Emit = Arc::new(|event| {

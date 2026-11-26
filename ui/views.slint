@@ -328,6 +328,7 @@ export component SettingsView inherits ScrollView {
     in property <int> bitrate;
     in property <bool> normalise;
     in property <bool> tray;
+    in property <bool> updates;
     in property <bool> needs-restart;
     in property <bool> soloist;
     in property <bool> soloist-here;
@@ -368,6 +369,7 @@ export component SettingsView inherits ScrollView {
     callback set-bitrate(int);
     callback set-normalise(bool);
     callback set-tray(bool);
+    callback set-updates(bool);
     callback set-tint(float);
     callback set-motion(bool);
     callback logout();
@@ -500,6 +502,7 @@ export component SettingsView inherits ScrollView {
         }
         Section {
             text: "Updates";
+            Switch { text: "Look for new versions"; note: "Asks GitHub when Quaver starts"; checked: root.updates; toggled(on) => { root.set-updates(on); } }
             Text {
                 text: root.version == "" ? "This copy was built from source, so it isn't updated by itself. Using a version below replaces it."
                     : root.version-chosen ? "Quaver " + root.version + ". It stays on the version you chose until you use the newest one."

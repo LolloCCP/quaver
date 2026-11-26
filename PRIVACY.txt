@@ -1,0 +1,9 @@
+Quaver privacy
+
+Quaver has no accounts of its own, no analytics and no tracking. It connects to:
+
+- Spotify, to sign in, play music and show your library, friends, cover art and lyrics. That is what Quaver is for, and Spotify's own privacy policy applies to it.
+- Spotify's download site, only when you ask Quaver to download Spotify Soloist.
+- GitHub (api.github.com and github.com), each time Quaver starts, to look for and download new versions of Quaver. Like any web request this shows GitHub your IP address; nothing else about you is sent. Turn it off in Settings > Updates > "Look for new versions".
+
+Your login, settings and keys stay on this computer, in %LOCALAPPDATA%\Quaver.

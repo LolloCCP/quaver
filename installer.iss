@@ -10,6 +10,10 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 LicenseFile=LICENSE
+; Shown before installing: what Quaver sends where.
+InfoBeforeFile=PRIVACY.txt
+VersionInfoVersion={#Copy(Version, 2)}
+VersionInfoProductName=Quaver
 OutputDir=target\release
 OutputBaseFilename=quaverinstaller
 UninstallDisplayIcon={app}\quaver.exe

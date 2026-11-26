@@ -69,6 +69,7 @@ export component App inherits Window {
     in property <int> bitrate;
     in property <bool> normalise;
     in property <bool> tray;
+    in property <bool> updates;
     in property <bool> needs-restart;
     in property <bool> soloist;
     in property <string> player-note;
@@ -157,6 +158,7 @@ export component App inherits Window {
     callback set-bitrate(int);
     callback set-normalise(bool);
     callback set-tray(bool);
+    callback set-updates(bool);
     callback set-tint(float);
     callback set-motion(bool);
     callback glide(float);
@@ -457,6 +459,7 @@ export component App inherits Window {
                                 bitrate: root.bitrate;
                                 normalise: root.normalise;
                                 tray: root.tray;
+                                updates: root.updates;
                                 needs-restart: root.needs-restart;
                                 soloist: root.soloist;
                                 player-note: root.player-note;
@@ -494,6 +497,7 @@ export component App inherits Window {
                                 set-bitrate(v) => { root.set-bitrate(v); }
                                 set-normalise(v) => { root.set-normalise(v); }
                                 set-tray(v) => { root.set-tray(v); }
+                                set-updates(v) => { root.set-updates(v); }
                                 set-tint(v) => { root.set-tint(v); }
                                 set-motion(v) => { root.set-motion(v); }
                                 logout => { root.settings-open = false; root.logout(); }
