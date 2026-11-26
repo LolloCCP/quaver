@@ -1091,7 +1091,7 @@ fn when_window_exists(tx: UnboundedSender<Cmd>) {
 }
 
 fn media_controls(app: &App, tx: UnboundedSender<Cmd>) -> Option<MediaControls> {
-    let config = PlatformConfig { display_name: "Quaver", dbus_name: "quaver", hwnd: Some(hwnd(app)?) };
+    let config = PlatformConfig { display_name: "Rustbeat", dbus_name: "rustbeat", hwnd: Some(hwnd(app)?) };
     let mut media = MediaControls::new(config).map_err(|e| log::warn!("media controls: {e:?}")).ok()?;
     let attached = media.attach(move |event| {
         let cmd = match event {
@@ -1113,11 +1113,11 @@ fn media_controls(app: &App, tx: UnboundedSender<Cmd>) -> Option<MediaControls> 
 fn main() -> Result<(), slint::PlatformError> {
     env_logger::init();
     updater::wait();
-    let Some(instance) = instance::claim(r"Local\Quaver") else { return Ok(()) };
+    let Some(instance) = instance::claim(r"Local\Rustbeat") else { return Ok(()) };
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return Err("LOCALAPPDATA is not set".into());
     };
-    let data_dir = PathBuf::from(local).join("Quaver");
+    let data_dir = PathBuf::from(local).join("Rustbeat");
 
     let settings_path = data_dir.join("settings.txt");
     let settings = Settings::load(&settings_path);

@@ -143,7 +143,7 @@ fn end_with_us(child: &Child) {
     });
     let assigned = child.raw_handle().is_some_and(|process| job != 0 && unsafe { AssignProcessToJobObject(job as *mut c_void, process) } != 0);
     if !assigned {
-        log::warn!("soloist may outlive quaver: {}", std::io::Error::last_os_error());
+        log::warn!("soloist may outlive rustbeat: {}", std::io::Error::last_os_error());
     }
 }
 
@@ -207,7 +207,7 @@ async fn launch(setup: &Setup, data_dir: &Path, normalise: bool) -> Result<(Chil
     // Left behind if Soloist was killed; it would point at a port that is gone.
     let _ = std::fs::remove_file(&port_file);
     let mut child = Command::new(&setup.exe)
-        .args(["--device-name", "Quaver", "--ws", "127.0.0.1:0", "--cache-size", "500", "--api-key", &setup.key])
+        .args(["--device-name", "Rustbeat", "--ws", "127.0.0.1:0", "--cache-size", "500", "--api-key", &setup.key])
         .arg("--data-dir")
         .arg(&state)
         .arg("--cache-dir")
@@ -580,7 +580,7 @@ impl Player {
     fn ask_to_pair(&mut self, patience: Duration) {
         if self.unpaired.take_if(|since| since.elapsed() >= patience).is_some() {
             (self.emit)(Event::Paired(false));
-            (self.emit)(Event::Player("Almost there: open Spotify on your phone or computer, on this network, and pick “Quaver” as the device. Once is enough.".into()));
+            (self.emit)(Event::Player("Almost there: open Spotify on your phone or computer, on this network, and pick “Rustbeat” as the device. Once is enough.".into()));
         }
     }
 
@@ -885,7 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_soloist_that_ends_at_once_is_reported() {
-        let dir = std::env::temp_dir().join(format!("quaver-launch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rustbeat-launch-{}", std::process::id()));
         // Any program that doesn't know these options ends with an error.
         let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32").join("where.exe");
         let failed = launch(&Setup { exe, key: "k".into() }, &dir, false).await.err().expect("must fail");
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn its_settings_are_tuned_and_the_rest_kept() {
-        let dir = std::env::temp_dir().join(format!("quaver-tune-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rustbeat-tune-{}", std::process::id()));
         tune(&dir, false).unwrap();
         let user = dir.join("settings").join("Users").join("someone-user");
         std::fs::create_dir_all(user.with_file_name("new-user")).unwrap();
@@ -956,7 +956,7 @@ Connessioni attive
 
     #[test]
     fn soloist_is_found_where_the_zip_puts_it() {
-        let dir = std::env::temp_dir().join(format!("quaver-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rustbeat-test-{}", std::process::id()));
         let inner = Setup::dir(&dir).join("soloist_release");
         std::fs::create_dir_all(&inner).unwrap();
         assert!(Setup::load(&dir).is_err());

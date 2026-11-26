@@ -1,4 +1,4 @@
-//! Lets only one Quaver run: two would fight over Soloist, and both be called "Quaver" in Spotify.
+//! Lets only one Rustbeat run: two would fight over Soloist, and both be called "Rustbeat" in Spotify.
 
 use std::{ffi::c_void, io, ptr::null_mut};
 
@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn the_first_is_told_about_the_second() {
-        let name = format!("Local\\quaver-test-{}", std::process::id());
+        let name = format!("Local\\rustbeat-test-{}", std::process::id());
         let first = super::claim(&name).expect("nobody has it yet");
         let (tx, rx) = mpsc::channel();
         first.on_another(move || tx.send(()).unwrap());

@@ -16,8 +16,8 @@ use tokio::{net::UdpSocket as AsyncSocket, task::JoinHandle};
 const GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const PORT: u16 = 5353;
 const SERVICE: &str = "_spotify-connect._tcp.local";
-const INSTANCE: &str = "quaver._spotify-connect._tcp.local";
-const HOST: &str = "quaver-soloist.local";
+const INSTANCE: &str = "rustbeat._spotify-connect._tcp.local";
+const HOST: &str = "rustbeat-soloist.local";
 /// How long others may remember this, in seconds. It is said again well before.
 const LIFETIME: u32 = 20;
 const REPEAT: Duration = Duration::from_secs(5);
@@ -183,11 +183,11 @@ mod tests {
         }
     }
 
-    /// Announces a Soloist that is already running: `QUAVER_PORT=<its port> cargo test announce_now -- --ignored`
+    /// Announces a Soloist that is already running: `RUSTBEAT_PORT=<its port> cargo test announce_now -- --ignored`
     #[tokio::test]
     #[ignore = "announces on the real network for a minute"]
     async fn announce_now() {
-        let port = std::env::var("QUAVER_PORT").unwrap().parse().unwrap();
+        let port = std::env::var("RUSTBEAT_PORT").unwrap().parse().unwrap();
         let address = local_address().unwrap();
         println!("announcing {address}:{port}");
         let _announcer = Announcer::start(address, port).unwrap();

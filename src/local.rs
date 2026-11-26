@@ -520,7 +520,7 @@ mod tests {
 
     /// Two albums of the same name, an untagged song, and things that aren't songs.
     fn folder(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("quaver-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rustbeat-{name}-{}", std::process::id()));
         for (path, bytes) in [
             ("one/b.flac", flac(&["TITLE=Second", "ARTIST=Ann", "ALBUM=Hits", "TRACKNUMBER=2/2"], 11)),
             ("one/a.FLAC", flac(&["TITLE=First", "ARTIST=Ann", "ALBUM=Hits", "TRACKNUMBER=1/2"], 11)),

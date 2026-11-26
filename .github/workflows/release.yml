@@ -1,4 +1,4 @@
-# Every push to main becomes a release, which Quaver installs by itself.
+# Every push to main becomes a release, which Rustbeat installs by itself.
 name: Release
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
   release:
     runs-on: windows-latest
     env:
-      QUAVER_VERSION: v0.1.${{ github.run_number }}
+      RUSTBEAT_VERSION: v0.1.${{ github.run_number }}
       GH_TOKEN: ${{ github.token }}
       # Nothing else has to be installed for it to run.
       RUSTFLAGS: -C target-feature=+crt-static
@@ -23,16 +23,16 @@ jobs:
       - name: Installer
         run: |
           choco install innosetup --yes --no-progress
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=$env:QUAVER_VERSION" installer.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=$env:RUSTBEAT_VERSION" installer.iss
           if ($LASTEXITCODE) { exit 1 }
       - name: Try the installer
         run: |
-          $app = "$env:LOCALAPPDATA\Programs\Quaver"
-          Start-Process target\release\quaverinstaller.exe '/VERYSILENT /SUPPRESSMSGBOXES' -Wait
-          if (-not (Test-Path $app\quaver.exe)) { throw 'not installed' }
+          $app = "$env:LOCALAPPDATA\Programs\Rustbeat"
+          Start-Process target\release\rustbeatinstaller.exe '/VERYSILENT /SUPPRESSMSGBOXES' -Wait
+          if (-not (Test-Path $app\rustbeat.exe)) { throw 'not installed' }
           Start-Process $app\unins000.exe '/VERYSILENT /SUPPRESSMSGBOXES' -Wait
-          if (Test-Path $app\quaver.exe) { throw 'not uninstalled' }
+          if (Test-Path $app\rustbeat.exe) { throw 'not uninstalled' }
       - run: |
           git log -1 --format=%B | Out-File notes.md -Encoding utf8
-          "Code signing policy: https://github.com/LolloCCP/quaver#code-signing-policy" | Add-Content notes.md -Encoding utf8
-          gh release create $env:QUAVER_VERSION target/release/quaver.exe target/release/quaverinstaller.exe --target ${{ github.sha }} --title $env:QUAVER_VERSION --notes-file notes.md
+          "Code signing policy: https://github.com/LolloCCP/rustbeat#code-signing-policy" | Add-Content notes.md -Encoding utf8
+          gh release create $env:RUSTBEAT_VERSION target/release/rustbeat.exe target/release/rustbeatinstaller.exe --target ${{ github.sha }} --title $env:RUSTBEAT_VERSION --notes-file notes.md

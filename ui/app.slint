@@ -6,7 +6,7 @@ import { ThemeCard, Version, TrackRow, Row, NowPlaying, SettingsView } from "vie
 export { Theme, Custom, Scene, ThemeCard, Version, TrackRow, Card, Shelf }
 
 export component App inherits Window {
-    title: root.track-title == "" ? "Quaver" : root.track-title + " · " + root.track-artist;
+    title: root.track-title == "" ? "Rustbeat" : root.track-title + " · " + root.track-artist;
     icon: @image-url("icon.svg");
     preferred-width: 1280px;
     preferred-height: 800px;
@@ -276,7 +276,7 @@ export component App inherits Window {
                         padding: 44px;
                         spacing: 20px;
                         HorizontalLayout { alignment: center; Image { source: @image-url("icon.svg"); width: 84px; height: 84px; } }
-                        Text { text: "Quaver"; font-size: 38px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
+                        Text { text: "Rustbeat"; font-size: 38px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
                         Text { text: root.message; wrap: word-wrap; color: Theme.dim; font-size: 15px; horizontal-alignment: center; }
                         if !root.busy: HorizontalLayout {
                             alignment: center;
@@ -335,7 +335,7 @@ export component App inherits Window {
                     padding-left: 8px;
                     spacing: 10px;
                     VerticalLayout { alignment: center; Image { source: @image-url("icon.svg"); width: 28px; height: 28px; } }
-                    Text { text: "Quaver"; color: Theme.text; font-size: 17px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: "Rustbeat"; color: Theme.text; font-size: 17px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
                     VerticalLayout { alignment: center; Icon { glyph: "\u{e72b}"; label: "Back"; enabled: root.can-go-back || root.settings-open; clicked => { root.go-back(); } } }
                     VerticalLayout { alignment: center; Icon { glyph: "\u{e72a}"; label: "Forward"; enabled: root.can-go-forward; clicked => { root.go-forward(); } } }
                 }
@@ -637,7 +637,7 @@ export component App inherits Window {
                     padding: 22px;
                     spacing: 12px;
                     Text { text: root.jam.length > 0 ? "Jam" : "No Jam right now"; color: Theme.text; font-size: 18px; font-weight: 700; }
-                    if root.jam.length == 0: Text { text: "Start or join one in the Spotify app and pick Quaver as the speaker. It shows up here, and Quaver leaves the order of songs to the Jam."; color: Theme.dim; wrap: word-wrap; }
+                    if root.jam.length == 0: Text { text: "Start or join one in the Spotify app and pick Rustbeat as the speaker. It shows up here, and Rustbeat leaves the order of songs to the Jam."; color: Theme.dim; wrap: word-wrap; }
                     for name in root.jam: HorizontalLayout {
                         spacing: 10px;
                         Text { width: 18px; text: "\u{e77b}"; font-family: Theme.icons; color: Theme.accent; vertical-alignment: center; }
@@ -686,8 +686,8 @@ export component App inherits Window {
                     padding: 34px;
                     spacing: 16px;
                     Text { text: "Spotify won't let this account play here yet"; color: Theme.text; font-size: 22px; font-weight: 700; wrap: word-wrap; }
-                    Text { text: "Quaver found the song, but Spotify refused to unlock it for the built-in player. It does that for newer accounts, and no app can change it."; color: Theme.dim; wrap: word-wrap; }
-                    Text { text: "Soloist is Spotify's own small player, and Quaver can play through it. It takes a download, a free key from Spotify, and picking Quaver once in the Spotify app."; color: Theme.dim; wrap: word-wrap; }
+                    Text { text: "Rustbeat found the song, but Spotify refused to unlock it for the built-in player. It does that for newer accounts, and no app can change it."; color: Theme.dim; wrap: word-wrap; }
+                    Text { text: "Soloist is Spotify's own small player, and Rustbeat can play through it. It takes a download, a free key from Spotify, and picking Rustbeat once in the Spotify app."; color: Theme.dim; wrap: word-wrap; }
                     HorizontalLayout {
                         spacing: 12px;
                         alignment: start;
@@ -702,7 +702,7 @@ export component App inherits Window {
 
 export component Tray inherits SystemTrayIcon {
     icon: @image-url("icon.svg");
-    tooltip: "Quaver";
+    tooltip: "Rustbeat";
     in property <bool> playing;
     callback show-window();
     callback toggle();
@@ -710,7 +710,7 @@ export component Tray inherits SystemTrayIcon {
     callback quit();
     clicked => { root.show-window(); }
     Menu {
-        MenuItem { title: "Open Quaver"; activated => { root.show-window(); } }
+        MenuItem { title: "Open Rustbeat"; activated => { root.show-window(); } }
         MenuItem { title: root.playing ? "Pause" : "Play"; activated => { root.toggle(); } }
         MenuItem { title: "Next"; activated => { root.next(); } }
         MenuSeparator {}

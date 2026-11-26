@@ -317,7 +317,7 @@ fn explain_chain(error: &(dyn std::error::Error + 'static)) -> String {
     }
     if CERTIFICATE_ERRORS.iter().any(|code| text.contains(&format!("os error {code}"))) {
         return concat!(
-            "This network is intercepting Spotify's secure connection, so Quaver stopped before ",
+            "This network is intercepting Spotify's secure connection, so Rustbeat stopped before ",
             "sending your login through it. Switch to another network, such as a phone hotspot",
         )
         .into();
@@ -332,7 +332,7 @@ fn sign_in() -> Result<Credentials, String> {
         vec!["streaming"],
     )
     .open_in_browser()
-    .with_custom_message("Signed in. You can close this tab and go back to Quaver.")
+    .with_custom_message("Signed in. You can close this tab and go back to Rustbeat.")
     .build()
     .and_then(|client| client.get_access_token())
     .map_err(|e| e.to_string())?;
@@ -416,7 +416,7 @@ async fn connected(
     let mut events = player.get_player_event_channel();
     let mut volume = cache.volume().unwrap_or(u16::MAX / 2);
     let config = ConnectConfig {
-        name: "Quaver".into(),
+        name: "Rustbeat".into(),
         device_type: DeviceType::Computer,
         initial_volume: volume,
         emit_set_queue_events: true,
@@ -1224,7 +1224,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network and a saved login"]
     async fn live() {
-        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Quaver");
+        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
         let login = Cache::new(Some(&dir), None, None, None).unwrap().credentials().expect("not signed in");
         let session = Session::new(SessionConfig::default(), None);
         session.connect(login, false).await.unwrap();
@@ -1259,7 +1259,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network and a saved login; prints counts only"]
     async fn home() {
-        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Quaver");
+        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
         let login = Cache::new(Some(&dir), None, None, None).unwrap().credentials().expect("not signed in");
         let session = Session::new(SessionConfig::default(), None);
         session.connect(login, false).await.unwrap();
@@ -1295,7 +1295,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network and a saved login; takes over playback"]
     async fn press_play() {
-        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Quaver");
+        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
         let (tx, rx) = mpsc::unbounded_channel();
         let (out, mut events) = mpsc::unbounded_channel();
         tokio::spawn(run(rx, Arc::new(move |e| drop(out.send(e))), dir, Arc::new(Shared::new(Default::default()))));
@@ -1305,7 +1305,7 @@ mod tests {
             match event {
                 Event::Ready => {
                     println!("{at:.1} ready, pressing play");
-                    let user = Cache::new(Some(PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Quaver")), None, None, None).unwrap();
+                    let user = Cache::new(Some(PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat")), None, None, None).unwrap();
                     let user = user.credentials().unwrap().username.unwrap();
                     tx.send(Cmd::Play { context: format!("spotify:user:{user}:collection"), track: String::new() }).unwrap();
                 }
@@ -1327,7 +1327,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network and a saved login"]
     async fn typing() {
-        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Quaver");
+        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
         let login = Cache::new(Some(&dir), None, None, None).unwrap().credentials().expect("not signed in");
         let session = Session::new(SessionConfig::default(), None);
         session.connect(login, false).await.unwrap();
@@ -1355,7 +1355,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network and a saved login"]
     async fn streaming() {
-        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Quaver");
+        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
         let login = Cache::new(Some(&dir), None, None, None).unwrap().credentials().expect("not signed in");
         let session = Session::new(SessionConfig::default(), None);
         session.connect(login, false).await.unwrap();

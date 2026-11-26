@@ -10,10 +10,10 @@ use serde_json::Value;
 
 use crate::soloist::fetch;
 
-const RELEASES: &str = "https://api.github.com/repos/LolloCCP/quaver/releases?per_page=15";
-const FILE: &str = "quaver.exe";
+const RELEASES: &str = "https://api.github.com/repos/LolloCCP/rustbeat/releases?per_page=15";
+const FILE: &str = "rustbeat.exe";
 /// Which release this is. What was built from source is none, and is left alone.
-pub const CURRENT: Option<&str> = option_env!("QUAVER_VERSION");
+pub const CURRENT: Option<&str> = option_env!("RUSTBEAT_VERSION");
 /// Tells a new copy to let the old one end first.
 const WAIT: &str = "--wait";
 
@@ -62,7 +62,7 @@ pub fn wanted<'a>(versions: &'a [Version], chosen: &str, current: Option<&str>) 
 pub fn install(tag: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let new = exe.with_extension("new");
-    fetch(&format!("https://github.com/LolloCCP/quaver/releases/download/{tag}/{FILE}"), &new)?;
+    fetch(&format!("https://github.com/LolloCCP/rustbeat/releases/download/{tag}/{FILE}"), &new)?;
     if !std::fs::read(&new).is_ok_and(|bytes| bytes.starts_with(b"MZ")) {
         return Err("The download is not a program".into());
     }
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn a_running_program_is_replaced_twice() {
-        let dir = std::env::temp_dir().join(format!("quaver-swap-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rustbeat-swap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (exe, new) = (dir.join("a.exe"), dir.join("a.new"));
         let ping = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32").join("ping.exe");

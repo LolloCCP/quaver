@@ -78,7 +78,7 @@ fn play(context: Value, track: &str) -> Value {
     if !track.is_empty() {
         options["skip_to"] = json!({ "track_uri": track });
     }
-    json!({ "endpoint": "play", "context": context, "play_origin": { "feature_identifier": "quaver" }, "options": options, "logging_params": {} })
+    json!({ "endpoint": "play", "context": context, "play_origin": { "feature_identifier": "rustbeat" }, "options": options, "logging_params": {} })
 }
 
 fn without_queue(state: &Value) -> Value {

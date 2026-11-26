@@ -437,7 +437,7 @@ export component SettingsView inherits ScrollView {
                     : root.soloist-step == 2 ? "Set up Soloist, step 2 of 3: get your free key on Spotify's page and copy it. Then come back and press Paste key."
                     : root.soloist-step == 4 ? "Soloist is set up. Choose it above to use it."
                     : root.soloist-ready ? "Soloist is connected and ready."
-                    : "Set up Soloist, step 3 of 3: in the Spotify app on this network, pick “Quaver” as the device, once. Allow it if Windows Firewall asks. If you did this before, it connects by itself.";
+                    : "Set up Soloist, step 3 of 3: in the Spotify app on this network, pick “Rustbeat” as the device, once. Allow it if Windows Firewall asks. If you did this before, it connects by itself.";
                 color: Theme.text;
                 wrap: word-wrap;
             }
@@ -488,25 +488,25 @@ export component SettingsView inherits ScrollView {
                 for rate in [96, 160, 320]: Pill { quiet: true; text: rate + " kbps"; selected: root.bitrate == rate; clicked => { root.set-bitrate(rate); } }
             }
             Switch { text: "Same volume for every song"; checked: root.normalise; toggled(on) => { root.set-normalise(on); } }
-            if root.needs-restart: Text { text: "Quality and volume changes apply the next time Quaver starts."; color: Theme.accent; font-size: 12px; }
+            if root.needs-restart: Text { text: "Quality and volume changes apply the next time Rustbeat starts."; color: Theme.accent; font-size: 12px; }
         }
         Section {
             text: "Window";
-            Switch { text: "Keep playing when the window is closed"; note: "Quaver stays in the tray"; checked: root.tray; toggled(on) => { root.set-tray(on); } }
+            Switch { text: "Keep playing when the window is closed"; note: "Rustbeat stays in the tray"; checked: root.tray; toggled(on) => { root.set-tray(on); } }
         }
         Section {
             text: "Listening together";
-            Text { text: "Jam: start or join one in the Spotify app with Quaver as the speaker. The people button in the player bar then shows who is in it, and its invite link."; color: Theme.dim; wrap: word-wrap; }
-            Text { text: "Discord: Listen Along belongs to your Spotify account, so it follows what Quaver plays through Soloist. Connect Spotify to Discord once, and turn on “Display Spotify as your status”."; color: Theme.dim; wrap: word-wrap; }
+            Text { text: "Jam: start or join one in the Spotify app with Rustbeat as the speaker. The people button in the player bar then shows who is in it, and its invite link."; color: Theme.dim; wrap: word-wrap; }
+            Text { text: "Discord: Listen Along belongs to your Spotify account, so it follows what Rustbeat plays through Soloist. Connect Spotify to Discord once, and turn on “Display Spotify as your status”."; color: Theme.dim; wrap: word-wrap; }
             HorizontalLayout { alignment: start; Pill { quiet: true; text: "Open Discord's connections"; clicked => { root.discord(); } } }
         }
         Section {
             text: "Updates";
-            Switch { text: "Look for new versions"; note: "Asks GitHub when Quaver starts"; checked: root.updates; toggled(on) => { root.set-updates(on); } }
+            Switch { text: "Look for new versions"; note: "Asks GitHub when Rustbeat starts"; checked: root.updates; toggled(on) => { root.set-updates(on); } }
             Text {
                 text: root.version == "" ? "This copy was built from source, so it isn't updated by itself. Using a version below replaces it."
-                    : root.version-chosen ? "Quaver " + root.version + ". It stays on the version you chose until you use the newest one."
-                    : "Quaver " + root.version + ". New versions are installed when Quaver starts, and used from the next start.";
+                    : root.version-chosen ? "Rustbeat " + root.version + ". It stays on the version you chose until you use the newest one."
+                    : "Rustbeat " + root.version + ". New versions are installed when Rustbeat starts, and used from the next start.";
                 color: Theme.text;
                 wrap: word-wrap;
             }
@@ -525,7 +525,7 @@ export component SettingsView inherits ScrollView {
         }
         Section {
             text: "About";
-            Text { text: "Quaver is unofficial and not affiliated with or approved by Spotify. Free software under the MIT license."; color: Theme.dim; wrap: word-wrap; }
+            Text { text: "Rustbeat is unofficial and not affiliated with or approved by Spotify. Free software under the MIT license."; color: Theme.dim; wrap: word-wrap; }
             HorizontalLayout {
                 alignment: start;
                 // Slint's credit is made for a dark background.
