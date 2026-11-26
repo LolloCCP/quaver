@@ -193,7 +193,9 @@ export component Pill inherits TouchArea {
     animate lift { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     width: label.preferred-width + (root.quiet ? 28px : 44px);
     height: root.quiet ? 34px : 46px;
-    mouse-cursor: pointer;
+    // A button that can't be used now looks it.
+    opacity: root.enabled || root.selected ? 1 : 0.45;
+    mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
     accessible-role: button;
     accessible-label: root.text;
     accessible-checked: root.selected;
@@ -586,6 +588,9 @@ export component Timeline inherits HorizontalLayout {
 }
 
 export component SearchBox inherits Rectangle {
+    in property <string> placeholder: "Search songs, artists and albums";
+    in property <string> glyph: "\u{e721}";
+    out property <string> value: input.text;
     callback accepted(string);
     callback edited(string);
     public function take-focus() { input.focus(); }
@@ -595,8 +600,8 @@ export component SearchBox inherits Rectangle {
     border-width: 1px;
     border-color: input.has-focus ? Theme.accent : over.has-hover ? Theme.hover-line : Theme.line;
     over := TouchArea { mouse-cursor: text; clicked => { input.focus(); } }
-    Text { x: 16px; width: 18px; text: "\u{e721}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; }
-    Text { x: 44px; visible: input.text == ""; text: "Search songs, artists and albums"; color: Theme.dim; vertical-alignment: center; }
+    Text { x: 16px; width: 18px; text: root.glyph; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; }
+    Text { x: 44px; visible: input.text == ""; text: root.placeholder; color: Theme.dim; vertical-alignment: center; }
     Rectangle {
         x: 44px;
         width: root.width - 64px;
@@ -610,7 +615,7 @@ export component SearchBox inherits Rectangle {
             selection-foreground-color: Theme.ink;
             vertical-alignment: center;
             accessible-role: text-input;
-            accessible-label: "Search songs, artists and albums";
+            accessible-label: root.placeholder;
             accepted => { if (self.text != "") { root.accepted(self.text); } }
             edited => { root.edited(self.text); }
         }

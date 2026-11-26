@@ -7,6 +7,7 @@ mod connect;
 mod eq;
 mod history;
 mod instance;
+mod library;
 mod local;
 mod people;
 mod resample;
@@ -16,7 +17,7 @@ mod soloist;
 mod updater;
 
 use std::{
-    cell::{Cell, RefCell}, collections::HashMap, ffi::c_void, path::PathBuf, rc::Rc,
+    cell::{Cell, RefCell}, collections::{HashMap, HashSet}, ffi::c_void, path::PathBuf, rc::Rc,
     sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::{Duration, Instant},
 };
@@ -82,6 +83,9 @@ struct Ui {
     /// Pictures by kind and id; `None` while one is being fetched.
     pictures: HashMap<(i32, String), Option<slint::Image>>,
     playlists: Rc<VecModel<Card>>,
+    /// Liked songs, and the playlists songs can be added to.
+    liked: HashSet<String>,
+    editable: HashSet<String>,
     tiles: Rc<VecModel<Card>>,
     shelves: Vec<Rc<VecModel<Card>>>,
     /// Start of each lyrics line. Belongs to `lyrics_uri`.
@@ -214,6 +218,28 @@ impl Ui {
     fn now_ms(&self) -> u32 {
         let run = if self.playing { self.since.elapsed().as_millis() as u32 } else { 0 };
         self.position_ms.saturating_add(run).min(self.duration_ms)
+    }
+
+    /// Hearts on the rows and on the song that plays.
+    fn show_likes(&self) {
+        for i in 0..self.rows.row_count() {
+            if let Some(mut row) = self.rows.row_data(i) {
+                let liked = self.liked.contains(row.uri.as_str());
+                if row.liked != liked {
+                    row.liked = liked;
+                    self.rows.set_row_data(i, row);
+                }
+            }
+        }
+        self.app.set_track_liked(self.liked.contains(&self.track_uri));
+    }
+
+    /// The playlist chooser for a song, or for a new empty playlist.
+    fn choose_playlist(&self, track: &str) {
+        let lists: Vec<Card> = (0..self.playlists.row_count()).filter_map(|i| self.playlists.row_data(i)).filter(|c| self.editable.contains(c.uri.as_str())).collect();
+        self.app.set_picker_lists(ModelRc::new(VecModel::from(lists)));
+        self.app.set_picker_track(track.into());
+        self.app.set_picker_open(true);
     }
 
     fn show_position(&self) {
@@ -789,6 +815,19 @@ impl Ui {
                 app.set_blocked(true);
             }
             Event::Playlists(list) => self.playlists.set_vec(list.into_iter().map(|c| card(c, SMALL)).collect::<Vec<_>>()),
+            Event::Editable(uris) => self.editable = uris.into_iter().collect(),
+            Event::Liked(uris) => {
+                self.liked = uris.into_iter().collect();
+                self.show_likes();
+            }
+            Event::LikeChanged { uri, on } => {
+                if on {
+                    self.liked.insert(uri);
+                } else {
+                    self.liked.remove(&uri);
+                }
+                self.show_likes();
+            }
             // Came too late: another page is shown, and home is loaded again when it is opened.
             Event::Home(_) | Event::NoHome(_) if !app.get_people_title().is_empty() => {}
             Event::People { uri, .. } if app.get_people_title().is_empty() || app.get_people_uri() != uri.as_str() => {}
@@ -836,6 +875,7 @@ impl Ui {
             Event::Rows(rows) => {
                 app.set_loading(false);
                 self.rows.extend(rows.into_iter().map(|r| TrackRow {
+                    liked: self.liked.contains(&r.uri),
                     uri: r.uri.into(),
                     title: r.title.into(),
                     artist: r.artist.into(),
@@ -866,6 +906,7 @@ impl Ui {
                 app.set_has_cover(false);
                 app.set_status("".into());
                 self.duration_ms = duration_ms;
+                app.set_track_liked(self.liked.contains(&uri));
                 self.track_uri = uri;
                 self.cover = None;
                 self.set_lyrics(false, vec![], "");
@@ -1292,6 +1333,25 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
     send!(app.on_set_follow(uri, on) Cmd::Follow { uri: uri.into(), on });
+    send!(app.on_like(uri, on) Cmd::Like { uri: uri.into(), on });
+    app.on_like_playing(|| with_ui(|ui| {
+        if ui.track_uri.starts_with("spotify:track:") {
+            let on = !ui.liked.contains(&ui.track_uri);
+            let _ = ui.tx.send(Cmd::Like { uri: ui.track_uri.clone(), on });
+        }
+    }));
+    app.on_choose_playlist(|track| with_ui(|ui| ui.choose_playlist(&track)));
+    app.on_add_playing(|| with_ui(|ui| {
+        if ui.track_uri.starts_with("spotify:track:") {
+            ui.choose_playlist(&ui.track_uri.clone());
+        }
+    }));
+    app.on_new_playlist(|name, track| with_ui(|ui| {
+        if !name.trim().is_empty() {
+            let _ = ui.tx.send(Cmd::NewPlaylist { name: name.trim().into(), track: track.into() });
+        }
+    }));
+    send!(app.on_add_to_playlist(playlist, name, track) Cmd::AddToPlaylist { playlist: playlist.into(), name: name.into(), track: track.into() });
     let go = {
         let (history, app) = (history.clone(), app.as_weak());
         move |step: fn(&mut History) -> Option<Page>| {
@@ -1682,6 +1742,8 @@ fn main() -> Result<(), slint::PlatformError> {
         tx,
         pictures: HashMap::new(),
         playlists,
+        liked: HashSet::new(),
+        editable: HashSet::new(),
         tiles,
         shelves: vec![],
         lyrics: vec![],

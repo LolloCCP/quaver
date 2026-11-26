@@ -46,6 +46,12 @@ every song"). That uses undocumented lines of Soloist's settings, which an updat
 Lists start through Spotify Connect's own, undocumented, commands, so the Spotify app sees the same list and can go on
 with it; without them only the chosen song plays. Pressing play in Rustbeat takes over from another device.
 
+## Your library
+
+The heart on a song, in the player and in Now Playing adds it to Liked Songs. The button next to it adds the song to one of
+your playlists or to a new one, and the + beside "Your library" makes an empty playlist. Like everything else here, this
+uses undocumented Spotify addresses.
+
 ## Karaoke
 
 The microphone button in Now Playing turns on karaoke, made to be left on a second screen: the cover on one side, in the

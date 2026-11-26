@@ -4,14 +4,18 @@ export struct Version { tag: string, about: string, used: bool }
 
 import { Theme, Scene, Glass, PointerLight, KeyFocus, Icon, Pill, Switch, Bar, EqBand, Custom, ColorPicker, SecretBox, Link, Cover, Transport, Timeline, Playing } from "glass.slint";
 
-export struct TrackRow { uri: string, title: string, artist: string, artist-uri: string, album: string, album-uri: string, duration: string, cover-id: string, cover: image, has-cover: bool }
+export struct TrackRow { uri: string, title: string, artist: string, artist-uri: string, album: string, album-uri: string, duration: string, cover-id: string, cover: image, has-cover: bool, liked: bool }
 
 export component Row inherits Rectangle {
     in property <TrackRow> item;
     in property <bool> current;
     in property <bool> lit;
+    // Liking and playlists need Spotify; offline files have neither.
+    in property <bool> can-save: true;
     callback play();
     callback enqueue();
+    callback like(bool);
+    callback add-to();
     callback open(string, string);
     callback need-cover(string);
     property <length> slide: root.lit ? 8px : 0px;
@@ -81,6 +85,22 @@ export component Row inherits Rectangle {
             }
             Link { text: item.album; linked: item.album-uri != ""; preferred-width: 0px; horizontal-stretch: 4; clicked => { root.open(item.album, item.album-uri); } }
             Text { text: item.duration; width: 44px; horizontal-alignment: right; vertical-alignment: center; color: Theme.dim; }
+            if root.can-save: VerticalLayout {
+                alignment: center;
+                // A liked song always shows its heart; the others only on hover.
+                Icon {
+                    opacity: item.liked || root.lit ? 1 : 0;
+                    glyph: item.liked ? "\u{eb52}" : "\u{eb51}";
+                    on: item.liked;
+                    label: (item.liked ? "Remove from Liked Songs: " : "Add to Liked Songs: ") + item.title;
+                    size: 13px;
+                    clicked => { root.like(!item.liked); }
+                }
+            }
+            if root.can-save: VerticalLayout {
+                alignment: center;
+                Icon { opacity: root.lit ? 1 : 0; glyph: "\u{ecc8}"; label: "Add to playlist: " + item.title; size: 13px; clicked => { root.add-to(); } }
+            }
             VerticalLayout {
                 alignment: center;
                 Icon { glyph: "\u{e710}"; label: "Add to queue: " + item.title; size: 12px; clicked => { root.enqueue(); } }
@@ -173,6 +193,8 @@ component SungLine inherits TouchArea {
     in property <float> d;
     in property <length> big;
     in property <length> middle;
+    // How far from the middle lines stay visible; past it they fade out.
+    in property <length> band: 10000px;
     property <length> small: root.big * 0.5;
     property <length> big-slot: root.big * 1.55;
     property <length> small-slot: root.small * 1.9;
@@ -186,7 +208,8 @@ component SungLine inherits TouchArea {
     height: root.slot;
     mouse-cursor: pointer;
     // Sung lines fade a little more than the ones to come.
-    opacity: root.near < 1 ? 1 - root.near * 0.62 : max(0, 0.38 - (abs(root.d) - 1) * 0.1) * (root.d < 0 ? 0.7 : 1);
+    property <float> edge: max(0, min(1, (root.band - abs(root.offset)) / (root.small-slot * 1.2)));
+    opacity: root.edge * (root.near < 1 ? 1 - root.near * 0.62 : max(0, 0.38 - (abs(root.d) - 1) * 0.1) * (root.d < 0 ? 0.7 : 1));
     measure := Text { visible: false; text: root.words; font-size: root.big; font-weight: 800; }
     Image {
         visible: root.near < 1;
@@ -261,6 +284,8 @@ component Karaoke inherits Rectangle {
     // The cover with what is playing and the controls under it; on a narrow window only the controls, at the bottom.
     // With the UI hidden, what is under the cover is invisible, so the cover moves down to the middle.
     property <length> info-height;
+    // The cover's top edge; the lyrics line up with the cover between it and its bottom.
+    property <length> art-top;
     VerticalLayout {
         x: 0;
         y: root.wide && !root.controls ? (root.info-height + below.height + 12px) / 2 : 0px;
@@ -275,6 +300,10 @@ component Karaoke inherits Rectangle {
             Rectangle {
                 width: root.art-style == 1 ? root.art-size * 1.4 : root.art-size;
                 height: root.art-style == 3 ? root.art-size * 1.38 : root.art-size;
+                // Tells the lyrics where the cover is, as it moves.
+                property <length> top: self.absolute-position.y - root.absolute-position.y;
+                init => { root.art-top = self.top; }
+                changed top => { root.art-top = self.top; }
                 Image { x: -parent.width * 0.3; y: -root.art-size * 0.3; width: parent.width * 1.6; height: root.art-size * 1.6; source: Theme.glow; colorize: Theme.fill; opacity: 0.45; }
                 if root.art-style == 1: Image {
                     // The record slides out of its sleeve while it plays.
@@ -340,6 +369,9 @@ component Karaoke inherits Rectangle {
         y: root.wide ? 40px : 80px;
         height: root.height - (root.wide ? 80px : 200px);
         property <length> big: max(30px, min(60px, self.width / 15));
+        // Level with the cover's middle, fading out where its top and bottom are.
+        property <length> middle: root.wide ? root.art-top + root.art-size / 2 - self.y : self.height * 0.45;
+        property <length> band: root.wide ? root.art-size / 2 : 10000px;
         if !root.synced || root.lines.length == 0: Text {
             width: parent.width;
             text: root.lines.length == 0 ? root.note : "These lyrics aren't timed, so there's nothing to sing along to.";
@@ -347,13 +379,14 @@ component Karaoke inherits Rectangle {
         }
         if root.synced: Rectangle {
             // Before the first line, dots wait where it will be sung.
-            SungLine { width: parent.width; words: "•  •  •"; d: -1 - root.pos; big: lyric.big; middle: lyric.height * 0.45; }
+            SungLine { width: parent.width; words: "•  •  •"; d: -1 - root.pos; big: lyric.big; middle: lyric.middle; band: lyric.band; }
             for line[i] in root.lines: SungLine {
                 width: parent.width;
                 words: line == "" ? "•  •  •" : line;
                 d: i - root.pos;
                 big: lyric.big;
-                middle: lyric.height * 0.45;
+                middle: lyric.middle;
+                band: lyric.band;
                 clicked => { root.seek(i); }
             }
         }
@@ -378,6 +411,10 @@ export component NowPlaying inherits Rectangle {
     in property <bool> lyrics-synced;
     in property <string> lyrics-note;
     in property <bool> karaoke;
+    in property <bool> track-liked;
+    in property <bool> can-save;
+    callback like-playing();
+    callback add-playing();
     in property <float> volume;
     callback set-volume(float);
     in property <image> stage-art;
@@ -458,7 +495,15 @@ export component NowPlaying inherits Rectangle {
             }
         }
         Rectangle { height: 16px; }
-        Text { text: root.title; font-size: 30px; font-weight: 700; color: Theme.text; horizontal-alignment: center; overflow: elide; }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            // As wide as the buttons after the title, so the title stays in the middle.
+            if root.can-save: Rectangle { width: 2 * 36px + 6px; }
+            Text { text: root.title; font-size: 30px; font-weight: 700; color: Theme.text; overflow: elide; min-width: 0px; }
+            if root.can-save: VerticalLayout { alignment: center; Icon { glyph: root.track-liked ? "\u{eb52}" : "\u{eb51}"; on: root.track-liked; label: root.track-liked ? "Remove from Liked Songs" : "Add to Liked Songs"; clicked => { root.like-playing(); } } }
+            if root.can-save: VerticalLayout { alignment: center; Icon { glyph: "\u{ecc8}"; label: "Add to playlist"; clicked => { root.add-playing(); } } }
+        }
         Text { text: root.artist; font-size: 18px; color: Theme.accent; horizontal-alignment: center; overflow: elide; }
         Text { text: root.album; color: Theme.dim; horizontal-alignment: center; overflow: elide; }
         HorizontalLayout {
