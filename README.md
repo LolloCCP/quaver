@@ -63,14 +63,6 @@ Everything is in `%LOCALAPPDATA%\Rustbeat`: the login in `credentials.json` ("Si
 Rustbeat has no analytics or tracking. It talks to Spotify, and to GitHub when it starts to look for new versions (off in
 Settings > Updates); [PRIVACY.txt](PRIVACY.txt) has the details, and the installer shows it.
 
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-Only what `.github/workflows/release.yml` builds from this repository is signed.
-
-- Author, reviewer and approver: [LolloCCP](https://github.com/LolloCCP)
-
 ## License
 
 [MIT](LICENSE). Dependencies have their own licenses; Slint is used under its
