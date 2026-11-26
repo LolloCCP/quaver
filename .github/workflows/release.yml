@@ -28,10 +28,10 @@ jobs:
       - name: Try the installer
         run: |
           $app = "$env:LOCALAPPDATA\Programs\Quaver"
-          Start-Process target\release\quaver-setup.exe '/VERYSILENT /SUPPRESSMSGBOXES' -Wait
+          Start-Process target\release\quaverinstaller.exe '/VERYSILENT /SUPPRESSMSGBOXES' -Wait
           if (-not (Test-Path $app\quaver.exe)) { throw 'not installed' }
           Start-Process $app\unins000.exe '/VERYSILENT /SUPPRESSMSGBOXES' -Wait
           if (Test-Path $app\quaver.exe) { throw 'not uninstalled' }
       - run: |
           git log -1 --format=%B | Out-File notes.md -Encoding utf8
-          gh release create $env:QUAVER_VERSION target/release/quaver.exe target/release/quaver-setup.exe --target ${{ github.sha }} --title $env:QUAVER_VERSION --notes-file notes.md
+          gh release create $env:QUAVER_VERSION target/release/quaver.exe target/release/quaverinstaller.exe --target ${{ github.sha }} --title $env:QUAVER_VERSION --notes-file notes.md

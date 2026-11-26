@@ -9,7 +9,7 @@ A small native Spotify client for Windows: Rust, Slint (software rendered, no br
 
 ## Use
 
-Needs Windows and Spotify Premium. Get `quaver-setup.exe` from the
+Needs Windows and Spotify Premium. Get `quaverinstaller.exe` from the
 [latest release](https://github.com/LolloCCP/quaver/releases/latest); it installs for you alone, without admin rights. The
 installer isn't signed, so Windows may warn about it: "More info", then "Run anyway".
 
