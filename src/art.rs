@@ -26,6 +26,8 @@ pub struct Style {
 #[derive(Clone, Copy)]
 enum Base {
     Cover,
+    /// The cover's own gradient, as vivid and bright as text on it allows.
+    Vivid,
     /// The cover's colors, washed out almost to white.
     Pastel,
     Solid(Rgb),
@@ -40,7 +42,7 @@ enum Surface {
     Neon,
 }
 
-pub const STYLES: [Style; 7] = [
+pub const STYLES: [Style; 8] = [
     Style { id: "glass", name: "Liquid glass", bright: false, base: Base::Cover, surface: Surface::Glass, radius: 24., gloss: 1., glow: true, colors: None },
     Style { id: "midnight", name: "Midnight", bright: false, base: Base::Solid([9., 9., 13.]), surface: Surface::Flat([21., 21., 27.], 1., 0.06), radius: 14., gloss: 0., glow: false, colors: None },
     Style { id: "black", name: "Pure black", bright: false, base: Base::Solid([0.; 3]), surface: Surface::Flat([0.; 3], 1., 0.16), radius: 10., gloss: 0., glow: false, colors: None },
@@ -48,6 +50,7 @@ pub const STYLES: [Style; 7] = [
     Style { id: "vinyl", name: "Warm vinyl", bright: false, base: Base::Solid([27., 20., 15.]), surface: Surface::Flat([42., 31., 24.], 1., 0.09), radius: 14., gloss: 0.35, glow: false, colors: Some([[232., 150., 70.], [196., 84., 62.]]) },
     Style { id: "paper", name: "Paper", bright: true, base: Base::Solid([233., 228., 218.]), surface: Surface::Flat([250., 247., 241.], 1., 0.1), radius: 16., gloss: 0., glow: false, colors: None },
     Style { id: "mist", name: "Mist", bright: true, base: Base::Pastel, surface: Surface::Flat([255.; 3], 0.6, 0.12), radius: 22., gloss: 0.4, glow: false, colors: None },
+    Style { id: "cover", name: "Cover", bright: false, base: Base::Vivid, surface: Surface::Flat([0.; 3], 0.4, 0.14), radius: 20., gloss: 0.6, glow: true, colors: None },
 ];
 
 pub const CUSTOM: &str = "custom";
@@ -124,6 +127,8 @@ const GRID: usize = 8;
 const BACKDROP: usize = 256;
 /// Keeps every backdrop dark enough for the text on it.
 const MAX_LUMINANCE: f32 = 0.05;
+/// The Cover theme's: as bright as the accent on it stays readable.
+const VIVID_LUMINANCE: f32 = 0.09;
 /// The same for themes with dark text.
 const MIN_BRIGHT_LUMINANCE: f32 = 0.72;
 
@@ -156,7 +161,8 @@ fn default_cells() -> Vec<Rgb> {
 fn look_from(cells: &[Rgb], style: &Style) -> Look {
     let palette = palette(cells, style);
     let cells = &match style.base {
-        Base::Cover => backdrop_cells(cells),
+        Base::Cover => backdrop_cells(cells, 0.75, 1.3, MAX_LUMINANCE),
+        Base::Vivid => backdrop_cells(cells, 1., 1.5, VIVID_LUMINANCE),
         Base::Pastel => cells.iter().map(|c| lighten(*c, MIN_BRIGHT_LUMINANCE)).collect(),
         Base::Solid(color) => vec![color; GRID * GRID],
     };
@@ -175,15 +181,16 @@ fn look_from(cells: &[Rgb], style: &Style) -> Look {
 
 /// Richer colors, dimmed only as far as reading text needs: a deep blue stays vivid
 /// where a flat factor would turn it black.
-fn backdrop_cells(cells: &[Rgb]) -> Vec<Rgb> {
+/// `own` is how much of each cell's color is kept against the cover's mean, `saturation` how much it is boosted.
+fn backdrop_cells(cells: &[Rgb], own: f32, saturation: f32, max_luminance: f32) -> Vec<Rgb> {
     let mean: Rgb = std::array::from_fn(|c| cells.iter().map(|v| v[c]).sum::<f32>() / cells.len() as f32);
     cells
         .iter()
         .map(|cell| {
-            let mut color: Rgb = std::array::from_fn(|c| cell[c] * 0.75 + mean[c] * 0.25);
+            let mut color: Rgb = std::array::from_fn(|c| cell[c] * own + mean[c] * (1. - own));
             let gray = color.iter().sum::<f32>() / 3.;
-            color = color.map(|v| (gray + (v - gray) * 1.3).clamp(0., 254.));
-            while luminance(color.map(|v| v as u8)) > MAX_LUMINANCE {
+            color = color.map(|v| (gray + (v - gray) * saturation).clamp(0., 254.));
+            while luminance(color.map(|v| v as u8)) > max_luminance {
                 color = color.map(|v| v * 0.96);
             }
             color

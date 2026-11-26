@@ -37,11 +37,19 @@ lasts 90 days. Soloist is Spotify's software under Spotify's terms; it is not pa
 
 Can't connect? `cargo test probe -- --ignored --nocapture` prints why this network can't reach Spotify.
 
+The built-in player and Offline convert songs to the rate your sound device runs at (mostly 48 kHz) with a windowed-sinc
+filter, instead of rodio's linear one, which dulls the highs.
+
 Through Soloist, Rustbeat asks for lossless and turns Spotify's loudness normalization off (or on, with "Same volume for
 every song"). That uses undocumented lines of Soloist's settings, which an update may change.
 
 Lists start through Spotify Connect's own, undocumented, commands, so the Spotify app sees the same list and can go on
 with it; without them only the chosen song plays. Pressing play in Rustbeat takes over from another device.
+
+## Karaoke
+
+The microphone button in Now Playing turns on karaoke: timed lyrics one line at a time on a dark stage in the cover's
+colors, each line lit as it is sung. Click a line to go to it.
 
 ## Friends
 

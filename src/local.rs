@@ -20,6 +20,7 @@ use tokio::sync::{Semaphore, mpsc};
 use crate::{
     backend::{Card, Cmd, Emit, End, Event, Row, Shelf},
     eq::Equalized,
+    resample::Resampled,
     sequence::Sequence,
     settings::Shared,
     soloist::{OUTPUT_CHECK, RESTART_AFTER_MS, output},
@@ -312,7 +313,7 @@ impl Player {
         if !from.is_zero() {
             source.try_seek(from)?;
         }
-        // The song's own rate leaves any conversion to Windows, which does it better than rodio.
+        // Asks for the song's own rate; Windows' shared mode mostly refuses it, and then we convert, better than rodio.
         let rate = source.sample_rate();
         if self.stream.as_ref().is_none_or(|(old, _)| *old != rate) {
             self.stream = None;
@@ -326,7 +327,13 @@ impl Player {
         if !playing {
             sink.pause();
         }
-        sink.append(Equalized::new(source, self.shared.clone()));
+        let source = Equalized::new(source, self.shared.clone());
+        let device_rate = stream.config().sample_rate();
+        if device_rate == rate {
+            sink.append(source);
+        } else {
+            sink.append(Resampled::new(source, device_rate));
+        }
         self.sink = Some(sink);
         self.from = from;
         Ok(())

@@ -119,7 +119,8 @@ component Lyrics inherits Rectangle {
             root.by-hand = true;
             root.flicks += 1;
         }
-        animate content-y { duration: root.by-hand ? 0ms : Theme.quick * 2.6; easing: ease-in-out; }
+        // Moves off at once and settles softly, so a line that comes mid-glide carries on without a stop.
+        animate content-y { duration: root.by-hand ? 0ms : Theme.quick * 4; easing: cubic-bezier(0.22, 0.75, 0.25, 1); }
         column := VerticalLayout {
             width: root.width;
             padding-top: root.synced ? root.height * 0.4 : 8px;
@@ -158,6 +159,92 @@ component Lyrics inherits Rectangle {
     }
 }
 
+
+// Sing-along: one line at a time in the dark, lit as it is sung, in the cover's colors.
+component Karaoke inherits Rectangle {
+    in property <[string]> lines;
+    in property <int> active;
+    // The line being sung plus how much of it is done (see `sweep` in main.rs).
+    in property <float> sweep;
+    in property <bool> synced;
+    in property <string> note;
+    in property <image> cover;
+    in property <bool> has-cover;
+    in property <string> title;
+    in property <string> artist;
+    callback seek(int);
+    // Glides between the updates, which come a few times a second.
+    property <float> flow: root.sweep;
+    animate flow { duration: Theme.motion ? 160ms : 0ms; }
+    property <length> focus-y;
+    animate focus-y { duration: Theme.quick * 3.5; easing: cubic-bezier(0.22, 0.75, 0.25, 1); }
+    // The glow swells a little with each new line.
+    property <bool> swell;
+    changed active => { root.swell = true; swell-end.running = true; }
+    swell-end := Timer { interval: 180ms; running: false; triggered => { root.swell = false; self.running = false; } }
+    property <length> size: min(46px, max(26px, root.width / 26));
+    background: #040306;
+    clip: true;
+    if root.has-cover: Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; opacity: 0.13; }
+    Image {
+        x: -root.width * 0.25; y: root.height * 0.35; width: root.width * 0.9; height: root.width * 0.9;
+        source: Theme.glow; colorize: Theme.fill;
+        opacity: root.swell ? 0.5 : 0.34;
+        animate opacity { duration: root.swell ? Theme.quick : Theme.quick * 6; easing: ease-out; }
+    }
+    Image { x: root.width * 0.45; y: -root.width * 0.4; width: root.width * 0.8; height: root.width * 0.8; source: Theme.glow; colorize: Theme.fill2; opacity: 0.26; }
+    Rectangle { background: @radial-gradient(circle, #04030600 0%, #04030699 55%, #040306f2 100%); }
+    VerticalLayout {
+        x: 40px; y: 26px; width: root.width - 260px; height: 50px; spacing: 2px;
+        Text { text: root.title; color: Theme.text.with-alpha(0.7); font-size: 13px; font-weight: 700; letter-spacing: 3px; overflow: elide; }
+        Text { text: root.artist; color: Theme.accent.with-alpha(0.7); font-size: 12px; letter-spacing: 2px; overflow: elide; }
+    }
+    if !root.synced || root.lines.length == 0: Text {
+        text: root.lines.length == 0 ? root.note : "These lyrics aren't timed, so there's nothing to sing along to.";
+        color: Theme.dim; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+        width: root.width - 80px; x: 40px;
+    }
+    if root.synced: Rectangle {
+        y: root.height * 0.46 - root.focus-y;
+        height: column.preferred-height;
+        column := VerticalLayout {
+            spacing: root.size * 0.7;
+            for line[i] in root.lines: line-area := TouchArea {
+                property <int> away: i - max(root.active, 0);
+                property <bool> here: i == root.active;
+                property <float> lit: max(0, min(1, root.flow - i));
+                property <string> words: line == "" ? "•  •  •" : line;
+                // Shrinks a long line to fit instead of wrapping, so it is lit left to right.
+                property <float> fit: min(1, (root.width - 80px) / max(1px, measure.preferred-width));
+                function place() { if (self.away == 0) { root.focus-y = self.y + self.height / 2; } }
+                init => { self.place(); }
+                changed away => { self.place(); }
+                changed y => { self.place(); }
+                height: root.size * 1.5;
+                mouse-cursor: pointer;
+                clicked => { root.seek(i); }
+                opacity: self.here ? 1 : max(0.05, (self.away < 0 ? 0.32 : 0.5) - abs(self.away) * 0.12);
+                animate opacity { duration: Theme.quick * 2.5; easing: ease-in-out; }
+                measure := Text { visible: false; text: line-area.words; font-size: root.size; font-weight: 800; }
+                Rectangle {
+                    width: measure.preferred-width * line-area.fit;
+                    // Before its turn a line waits unlit; once sung it stays softly lit.
+                    Text { text: line-area.words; font-size: root.size * line-area.fit; font-weight: 800; color: Theme.text.with-alpha(line-area.away < 0 ? 0.55 : 0.22); vertical-alignment: center; }
+                    Rectangle {
+                        x: 0; width: parent.width * (line-area.away < 0 ? 1 : line-area.lit); clip: true;
+                        Text { x: 0; width: measure.preferred-width * line-area.fit; text: line-area.words; font-size: root.size * line-area.fit; font-weight: 800; color: line-area.here ? Theme.text : Theme.text.with-alpha(0.55); vertical-alignment: center; }
+                    }
+                    if line-area.here: Rectangle {
+                        x: 0; y: parent.height - 2px; height: 3px; border-radius: 1.5px;
+                        width: parent.width * line-area.lit;
+                        background: @linear-gradient(90deg, Theme.fill 0%, Theme.fill2 100%);
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component NowPlaying inherits Rectangle {
     in property <string> title;
     in property <string> artist;
@@ -175,6 +262,9 @@ export component NowPlaying inherits Rectangle {
     in property <int> lyrics-active;
     in property <bool> lyrics-synced;
     in property <string> lyrics-note;
+    in property <float> lyrics-sweep;
+    in property <bool> karaoke;
+    callback toggle-karaoke();
     callback toggle();
     callback next();
     callback prev();
@@ -219,6 +309,7 @@ export component NowPlaying inherits Rectangle {
         }
     }
     VerticalLayout {
+        visible: !root.karaoke;
         x: 0;
         width: root.left;
         padding-left: 32px;
@@ -284,7 +375,7 @@ export component NowPlaying inherits Rectangle {
             }
         }
     }
-    if root.lyrics-open: Lyrics {
+    if root.lyrics-open && !root.karaoke: Lyrics {
         x: root.left;
         y: 76px;
         width: root.width - root.left - 48px;
@@ -295,10 +386,47 @@ export component NowPlaying inherits Rectangle {
         note: root.lyrics-note;
         seek(i) => { root.seek-line(i); }
     }
+    if root.karaoke: Karaoke {
+        lines: root.lyrics;
+        active: root.lyrics-active;
+        sweep: root.lyrics-sweep;
+        synced: root.lyrics-synced;
+        note: root.lyrics-note;
+        cover: root.cover;
+        has-cover: root.has-cover;
+        title: root.title;
+        artist: root.artist;
+        seek(i) => { root.seek-line(i); }
+    }
+    if root.karaoke: Glass {
+        x: (root.width - self.width) / 2;
+        y: root.height - 112px;
+        width: min(root.width - 64px, 520px);
+        height: 96px;
+        opacity: root.controls ? 1 : 0;
+        animate opacity { duration: Theme.quick * 2.4; }
+        VerticalLayout {
+            padding: 10px;
+            alignment: center;
+            spacing: 4px;
+            Timeline { progress: root.progress; elapsed: root.elapsed; total: root.total; seek(v) => { root.awake = true; root.seek(v); } }
+            Transport {
+                size: 44px;
+                playing: root.playing;
+                shuffle: root.shuffle;
+                repeat: root.repeat;
+                toggle => { root.awake = true; root.toggle(); }
+                next => { root.awake = true; root.next(); }
+                prev => { root.awake = true; root.prev(); }
+                set-shuffle(on) => { root.awake = true; root.set-shuffle(on); }
+                set-repeat(m) => { root.awake = true; root.set-repeat(m); }
+            }
+        }
+    }
     Glass {
-        x: root.width - 152px;
+        x: root.width - 196px;
         y: 14px;
-        width: 138px;
+        width: 182px;
         height: 50px;
         opacity: root.controls ? 1 : 0;
         animate opacity { duration: Theme.quick * 2.4; }
@@ -306,7 +434,8 @@ export component NowPlaying inherits Rectangle {
             padding: 7px;
             spacing: 6px;
             alignment: center;
-            Icon { glyph: "\u{e8bd}"; label: root.lyrics-open ? "Hide lyrics" : "Show lyrics"; on: root.lyrics-open; clicked => { root.toggle-lyrics(); } }
+            Icon { glyph: "\u{e720}"; label: root.karaoke ? "Leave karaoke" : "Karaoke"; on: root.karaoke; clicked => { root.toggle-karaoke(); } }
+            Icon { glyph: "\u{e8bd}"; label: root.lyrics-open ? "Hide lyrics" : "Show lyrics"; on: root.lyrics-open; enabled: !root.karaoke; clicked => { root.toggle-lyrics(); } }
             Icon { glyph: "\u{e740}"; label: "Full screen"; clicked => { root.fullscreen(); } }
             Icon { glyph: "\u{e70d}"; label: "Close now playing"; clicked => { root.close(); } }
         }

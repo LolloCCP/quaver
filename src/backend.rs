@@ -411,7 +411,16 @@ async fn connected(
         player_config,
         session.clone(),
         mixer.get_soft_volume(),
-        move || Box::new(EqSink::new(sink(None, AudioFormat::F32), eq_settings)),
+        move || {
+            let out: Box<dyn audio_backend::Sink> = match crate::resample::Out::open() {
+                Ok(out) => Box::new(out),
+                Err(e) => {
+                    log::warn!("Falling back to librespot's own output: {e}");
+                    sink(None, AudioFormat::F32)
+                }
+            };
+            Box::new(EqSink::new(out, eq_settings))
+        },
     );
     let mut events = player.get_player_event_channel();
     let mut volume = cache.volume().unwrap_or(u16::MAX / 2);

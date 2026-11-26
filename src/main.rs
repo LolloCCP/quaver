@@ -9,6 +9,7 @@ mod history;
 mod instance;
 mod local;
 mod people;
+mod resample;
 mod sequence;
 mod settings;
 mod soloist;
@@ -246,6 +247,7 @@ impl Ui {
 
     fn follow_lyrics(&self, now: u32) {
         self.app.set_lyrics_active(line_at(&self.lyrics, now));
+        self.app.set_lyrics_sweep(sweep(&self.lyrics, now, self.duration_ms));
     }
 
     fn want_picture(&mut self, kind: i32, id: String) {
@@ -880,6 +882,17 @@ fn local_hour() -> u16 {
 /// Index of the line being sung, -1 before the first.
 fn line_at(starts: &[u32], now: u32) -> i32 {
     starts.partition_point(|start| *start <= now) as i32 - 1
+}
+
+/// How far singing is: the line being sung plus how much of it is done, from -1 before the first.
+/// Rises without jumping back, so the UI can glide between updates.
+fn sweep(starts: &[u32], now: u32, end: u32) -> f32 {
+    /// A line followed by a long pause is sung in this time at most.
+    const LONGEST: u32 = 7000;
+    let line = line_at(starts, now);
+    let from = if line < 0 { 0 } else { starts[line as usize] };
+    let to = starts.get((line + 1) as usize).copied().unwrap_or(end).min(from.saturating_add(LONGEST));
+    line as f32 + (now.saturating_sub(from) as f32 / to.saturating_sub(from).max(1) as f32).min(1.)
 }
 
 /// Feeds the pointer to the UI and turns the wheel into gliding scrolling. This only talks
@@ -1640,6 +1653,14 @@ mod tests {
         let starts = [1000, 2000, 2000, 5000];
         assert_eq!([0, 1000, 1999, 2000, 9000].map(|t| super::line_at(&starts, t)), [-1, 0, 0, 2, 3]);
         assert_eq!(super::line_at(&[], 10), -1);
+    }
+
+    #[test]
+    fn singing_sweeps_through_each_line() {
+        let starts = [1000, 2000, 30000];
+        let at = |t| super::sweep(&starts, t, 40000);
+        assert_eq!([0, 500, 1000, 1500, 2000, 5500, 9000, 30000, 33500, 99000].map(at), [-1., -0.5, 0., 0.5, 1., 1.5, 2., 2., 2.5, 3.]);
+        assert_eq!(super::sweep(&[], 500, 0), 0.);
     }
 
     #[test]

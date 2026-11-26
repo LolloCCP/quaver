@@ -58,7 +58,9 @@ export component App inherits Window {
     in property <int> lyrics-active: -1;
     in property <bool> lyrics-synced;
     in property <string> lyrics-note;
-    out property <bool> lyrics-visible: root.ready && (root.now-playing ? root.lyrics-open : root.panel-shown);
+    in property <float> lyrics-sweep: -1;
+    in-out property <bool> karaoke;
+    out property <bool> lyrics-visible: root.ready && (root.now-playing ? root.lyrics-open || root.karaoke : root.panel-shown);
     in-out property <bool> settings-open;
     property <bool> list-shown: !root.home-open && !root.settings-open;
     property <bool> panel-shown: root.panel-open && root.width >= 1160px && root.track-title != "";
@@ -310,6 +312,9 @@ export component App inherits Window {
             lyrics-active: root.lyrics-active;
             lyrics-synced: root.lyrics-synced;
             lyrics-note: root.lyrics-note;
+            lyrics-sweep: root.lyrics-sweep;
+            karaoke: root.karaoke;
+            toggle-karaoke => { root.karaoke = !root.karaoke; }
             toggle => { root.toggle(); }
             next => { root.next(); }
             prev => { root.prev(); }
