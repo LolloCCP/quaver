@@ -19,6 +19,7 @@ OutputBaseFilename=rustbeatinstaller
 UninstallDisplayIcon={app}\rustbeat.exe
 CloseApplications=force
 WizardStyle=modern
+SetupIconFile=ui\icon.ico
 
 [Tasks]
 Name: desktop; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked

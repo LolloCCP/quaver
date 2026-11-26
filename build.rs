@@ -13,7 +13,10 @@ fn main() {
         let parts: Vec<u64> = version.split('.').map(|p| p.parse().expect("version like 0.1.2")).collect();
         assert_eq!(parts.len(), 3, "version like 0.1.2: {version}");
         let packed = parts[0] << 48 | parts[1] << 32 | parts[2] << 16;
+        println!("cargo:rerun-if-changed=ui/icon.ico");
         let mut res = winresource::WindowsResource::new();
+        // The exe's own icon: Explorer, the taskbar and shortcuts. Made from ui/icon.svg.
+        res.set_icon("ui/icon.ico");
         res.set("ProductName", "Rustbeat")
             .set("FileDescription", "Rustbeat")
             .set("ProductVersion", &version)
