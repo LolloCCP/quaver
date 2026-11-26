@@ -122,6 +122,8 @@ fn with_ui(f: impl FnOnce(&mut Ui)) {
 
 const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 const DWMWA_CAPTION_COLOR: u32 = 35;
+const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+const DWMWCP_ROUND: u32 = 2;
 
 #[link(name = "dwmapi")]
 unsafe extern "system" {
@@ -282,11 +284,13 @@ impl Ui {
     }
 
     fn follow_lyrics(&self, now: u32) {
-        let line = line_at(&self.lyrics, now);
+        // Karaoke's glide (500ms in views.slint) starts that early, so it ends as the line begins.
+        let at = now + if self.app.get_karaoke() { 500 } else { 0 };
+        let line = line_at(&self.lyrics, at);
         self.app.set_lyrics_active(line);
         match self.lyrics.get((line + 1) as usize) {
             // A few ms late rather than early, so the line has started when it is shown.
-            Some(next) if self.playing => self.next_line.start(slint::TimerMode::SingleShot, Duration::from_millis((next - now) as u64 + 4), || with_ui(|ui| ui.show_position())),
+            Some(next) if self.playing => self.next_line.start(slint::TimerMode::SingleShot, Duration::from_millis((next - at) as u64 + 4), || with_ui(|ui| ui.show_position())),
             _ => self.next_line.stop(),
         }
     }
@@ -717,7 +721,13 @@ impl Ui {
             // Purely cosmetic, so older Windows versions may refuse it.
             set(DWMWA_USE_IMMERSIVE_DARK_MODE, !self.scene.style.bright as u32);
             set(DWMWA_CAPTION_COLOR, u32::from_le_bytes([r, g, b, 0]));
+            // Without the Windows frame, the round corners and the shadow have to be asked for.
+            set(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
         }
+        self.app.window().with_winit_window(|window| {
+            use slint::winit_030::winit::platform::windows::WindowExtWindows;
+            window.set_undecorated_shadow(true);
+        });
     }
 
     fn media_update(&mut self, f: impl FnOnce(&mut MediaControls) -> Result<(), souvlaki::Error>) {
@@ -834,6 +844,7 @@ impl Ui {
             Event::People { profile: Err(e), .. } => app.set_home_note(e.into()),
             Event::People { profile: Ok(profile), .. } => {
                 app.set_people_title(profile.title.into());
+                app.set_people_about(profile.about.into());
                 app.set_follow(profile.followed.map_or(0, |f| 1 + f as i32));
                 app.set_home_note(if profile.shelves.is_empty() { "Nothing to see here." } else { "" }.into());
                 self.show_shelves(profile.shelves);
@@ -1059,6 +1070,7 @@ fn follow_pointer(app: &App) {
                     });
                 }
             }
+            WindowEvent::Resized(_) => app.set_is_maximized(window.is_maximized()),
             WindowEvent::ScaleFactorChanged { .. } => {
                 // Covers are drawn for one scale; the event may arrive while `with_ui` is busy.
                 let _ = slint::invoke_from_event_loop(|| with_ui(|ui| ui.redraw_pictures()));
@@ -1326,6 +1338,7 @@ fn main() -> Result<(), slint::PlatformError> {
             app.set_home_open(true);
             app.set_people_title(if uri.is_empty() { "Friends" } else { "Profile" }.into());
             app.set_people_uri(uri.clone());
+            app.set_people_about("".into());
             app.set_follow(0);
             app.set_home_note("".into());
             app.set_shelves(Default::default());
@@ -1404,6 +1417,13 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_open({
         let (tx, visit, app) = (tx.clone(), visit.clone(), app.as_weak());
         move |title, uri| {
+            // An artist opens their page; the page's own card opens their songs.
+            if uri.starts_with("spotify:artist:") && title != people::POPULAR {
+                if let Some(app) = app.upgrade() {
+                    app.invoke_people(uri);
+                }
+                return;
+            }
             let picture = app.upgrade().map(|app| app.get_list_picture_id().into()).unwrap_or_default();
             visit(Page::List { title: title.as_str().into(), uri: uri.as_str().into(), picture });
             let _ = tx.send(Cmd::Browse { title: title.into(), uri: uri.into() });
@@ -1506,6 +1526,41 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.cover_size = (size * ui.app.window().scale_factor()) as u32;
             ui.show_cover();
         }));
+    });
+    // Rustbeat's own title bar: it moves, resizes and sizes the window the way the Windows one did.
+    app.on_window_drag({
+        let app = app.as_weak();
+        move || if let Some(app) = app.upgrade() {
+            app.window().with_winit_window(|w| w.drag_window().inspect_err(|e| log::warn!("drag: {e}")).ok());
+        }
+    });
+    app.on_window_resize({
+        let app = app.as_weak();
+        move |side| if let Some(app) = app.upgrade() {
+            use slint::winit_030::winit::window::ResizeDirection::*;
+            // The same order as the edges in app.slint.
+            let Some(&direction) = [North, South, West, East, NorthWest, NorthEast, SouthWest, SouthEast].get(side as usize) else { return };
+            app.window().with_winit_window(|w| w.drag_resize_window(direction).inspect_err(|e| log::warn!("resize: {e}")).ok());
+        }
+    });
+    app.on_window_minimize({
+        let app = app.as_weak();
+        move || if let Some(app) = app.upgrade() {
+            app.window().set_minimized(true);
+        }
+    });
+    app.on_window_maximize({
+        let app = app.as_weak();
+        move || if let Some(app) = app.upgrade() {
+            app.window().set_maximized(!app.window().is_maximized());
+        }
+    });
+    app.on_window_close({
+        let app = app.as_weak();
+        // The same as the Windows close button: the tray setting decides whether it hides or quits.
+        move || if let Some(app) = app.upgrade() {
+            app.window().dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        }
     });
     app.on_toggle_fullscreen({
         let app = app.as_weak();

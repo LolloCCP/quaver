@@ -8,6 +8,17 @@ export { Theme, Custom, Scene, Playing, ThemeCard, Version, TrackRow, Card, Shel
 export component App inherits Window {
     title: root.track-title == "" ? "Rustbeat" : root.track-title + " · " + root.track-artist;
     icon: @image-url("icon.svg");
+    // Rustbeat draws its own window buttons and drag area (below), in place of the Windows title bar.
+    no-frame: true;
+    in property <bool> is-maximized;
+    // False while karaoke hides everything but the cover and the lyrics.
+    in-out property <bool> chrome-shown: true;
+    callback window-drag();
+    callback window-resize(int);
+    callback window-minimize();
+    callback window-maximize();
+    callback window-close();
+    property <duration> last-press;
     preferred-width: 1280px;
     preferred-height: 800px;
     min-width: 900px;
@@ -129,6 +140,8 @@ export component App inherits Window {
     // Whose page takes the place of home; the title is empty for none, the URI for one's own.
     in-out property <string> people-title;
     in-out property <string> people-uri;
+    // An artist's biography, shown under their name.
+    in property <string> people-about;
     in property <int> follow;
     callback people(string);
     callback set-follow(string, bool);
@@ -291,6 +304,17 @@ export component App inherits Window {
             return reject;
         }
 
+        // The top strip moves the window; two presses in a row maximize it, as the title bar did.
+        TouchArea {
+            height: 58px;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    if (animation-tick() - root.last-press < 400ms) { root.window-maximize(); } else { root.window-drag(); }
+                    root.last-press = animation-tick();
+                }
+            }
+        }
+
         if !root.ready: VerticalLayout {
             alignment: center;
             HorizontalLayout {
@@ -359,6 +383,9 @@ export component App inherits Window {
             toggle-lyrics => { root.lyrics-open = !root.lyrics-open; }
             close => { root.now-playing = false; root.leave-fullscreen(); }
             fullscreen => { root.toggle-fullscreen(); }
+            window-drag => { root.window-drag(); }
+            window-maximize => { root.window-maximize(); }
+            controls-changed(on) => { root.chrome-shown = on; }
             art-resized(size) => { root.art-resized(size); }
         }
 
@@ -369,6 +396,8 @@ export component App inherits Window {
             HorizontalLayout {
                 height: 46px;
                 spacing: 12px;
+                // Room for the window buttons.
+                padding-right: 112px;
                 HorizontalLayout {
                     width: root.library-width;
                     padding-left: 8px;
@@ -455,7 +484,7 @@ export component App inherits Window {
                                 height: 100%;
                                 animate y { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                                 greeting: root.people-title != "" ? root.people-title : root.greeting;
-                                hint: root.people-title != "" && root.people-uri == "" ? "To find someone, paste the link to their profile into the search box." : "";
+                                hint: root.people-title == "" ? "" : root.people-uri == "" ? "To find someone, paste the link to their profile into the search box." : root.people-about;
                                 follow: root.people-title != "" ? root.follow : 0;
                                 set-follow(on) => { root.set-follow(root.people-uri, on); }
                                 note: root.home-note;
@@ -622,6 +651,10 @@ export component App inherits Window {
                         if !root.offline && root.track-title != "": VerticalLayout {
                             alignment: center;
                             Icon { glyph: root.track-liked ? "\u{eb52}" : "\u{eb51}"; on: root.track-liked; size: 14px; label: root.track-liked ? "Remove from Liked Songs" : "Add to Liked Songs"; clicked => { root.like-playing(); } }
+                        }
+                        if !root.offline && root.track-title != "": VerticalLayout {
+                            alignment: center;
+                            Icon { glyph: "\u{ecc8}"; size: 14px; label: "Add to playlist"; clicked => { root.add-playing(); } }
                         }
                     }
                     VerticalLayout {
@@ -799,6 +832,41 @@ export component App inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // Minimize, maximize and close, at the top right of every page.
+    HorizontalLayout {
+        width: 3 * 36px + 2 * 2px;
+        x: root.width - self.width - 14px;
+        y: 17px;
+        height: 36px;
+        spacing: 2px;
+        opacity: root.chrome-shown || !root.now-playing ? 1 : 0;
+        animate opacity { duration: Theme.quick * 2.4; }
+        Icon { glyph: "\u{e921}"; label: "Minimize"; size: 11px; clicked => { root.window-minimize(); } }
+        Icon { glyph: root.is-maximized ? "\u{e923}" : "\u{e922}"; label: root.is-maximized ? "Restore" : "Maximize"; size: 11px; clicked => { root.window-maximize(); } }
+        Icon { glyph: "\u{e8bb}"; label: "Close"; size: 11px; clicked => { root.window-close(); } }
+    }
+
+    // Edges and corners that resize the window; the numbers are ResizeDirection in main.rs.
+    if !root.is-maximized: Rectangle {
+        for side in [
+            { d: 0, x: 5px, y: 0px, w: root.width - 10px, h: 5px, c: MouseCursor.ns-resize },
+            { d: 1, x: 5px, y: root.height - 5px, w: root.width - 10px, h: 5px, c: MouseCursor.ns-resize },
+            { d: 2, x: 0px, y: 5px, w: 5px, h: root.height - 10px, c: MouseCursor.ew-resize },
+            { d: 3, x: root.width - 5px, y: 5px, w: 5px, h: root.height - 10px, c: MouseCursor.ew-resize },
+            { d: 4, x: 0px, y: 0px, w: 10px, h: 10px, c: MouseCursor.nwse-resize },
+            { d: 5, x: root.width - 10px, y: 0px, w: 10px, h: 10px, c: MouseCursor.nesw-resize },
+            { d: 6, x: 0px, y: root.height - 10px, w: 10px, h: 10px, c: MouseCursor.nesw-resize },
+            { d: 7, x: root.width - 10px, y: root.height - 10px, w: 10px, h: 10px, c: MouseCursor.nwse-resize },
+        ]: TouchArea {
+            x: side.x;
+            y: side.y;
+            width: side.w;
+            height: side.h;
+            mouse-cursor: side.c;
+            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.window-resize(side.d); } }
         }
     }
 }

@@ -1,18 +1,26 @@
 //! Profiles: whom one follows, their public playlists, and what friends listen to.
 
-use librespot_core::{Error, Session};
+use futures_util::{StreamExt, stream};
+use librespot_core::{Error, Session, SpotifyUri};
+use librespot_metadata::{Album, Artist, Metadata, image::Image};
 use serde_json::{Value, json};
 
 use crate::backend::{Card, Shelf};
 
 /// How a card says that it opens a profile. The window looks for it too.
 pub const PROFILE: &str = "Profile";
+/// The card on an artist's page that opens their songs, instead of the page again.
+pub const POPULAR: &str = "Popular songs";
+/// Releases per shelf of an artist's page; each is a request of its own.
+const PER_SHELF: usize = 30;
 
 pub struct Profile {
     pub title: String,
     /// Whether the account follows this one; nothing for its own.
     pub followed: Option<bool>,
     pub shelves: Vec<Shelf>,
+    /// A few lines about an artist.
+    pub about: String,
 }
 
 /// The profile a link leads to, as people share it.
@@ -35,6 +43,9 @@ async fn get(session: &Session, path: &str) -> Result<Value, Error> {
 
 /// One's own page shows friends and `shared` playlists, someone else's their public playlists.
 pub async fn load(session: &Session, uri: &str, shared: Vec<Card>) -> Result<Profile, Error> {
+    if uri.starts_with("spotify:artist:") {
+        return artist(session, uri).await;
+    }
     let own = uri.is_empty();
     let name = session.username();
     let id = if own { name.as_str() } else { uri.rsplit(':').next().unwrap_or_default() };
@@ -57,7 +68,7 @@ pub async fn load(session: &Session, uri: &str, shared: Vec<Card>) -> Result<Pro
     shelves.retain(|s| !s.cards.is_empty());
     let title = if own { "Friends".into() } else { text(&profile["name"]) };
     let followed = (!own && profile["is_current_user"] != true).then(|| profile["is_following"] == true);
-    Ok(Profile { title, followed, shelves })
+    Ok(Profile { title, followed, shelves, about: String::new() })
 }
 
 /// Some people keep some of this to themselves.
@@ -79,6 +90,62 @@ pub async fn follow(session: &Session, uri: &str, on: bool) -> Result<(), Error>
 fn refused(answer: &[u8]) -> bool {
     let answer: Value = serde_json::from_slice(answer).unwrap_or_default();
     answer.as_array().into_iter().flatten().any(|a| a["status"].as_u64().is_some_and(|s| s >= 300))
+}
+
+/// An artist's page: their popular songs, their albums and their singles.
+async fn artist(session: &Session, uri: &str) -> Result<Profile, Error> {
+    let artist = Artist::get(session, &SpotifyUri::from_uri(uri)?).await?;
+    let albums: Vec<_> = artist.albums_current().cloned().collect();
+    let singles: Vec<_> = artist.singles_current().cloned().collect();
+    // Artists' own pictures often aren't served; their first album's cover stands in.
+    let mut albums = records(session, albums).await;
+    let picture = medium(&artist.portraits).or_else(|| albums.first().map(|a| a.picture.clone())).unwrap_or_default();
+    let mut shelves = vec![Shelf { title: "Popular".into(), cards: vec![Card { title: POPULAR.into(), subtitle: artist.name.clone(), uri: uri.to_owned(), picture }] }];
+    shelves.push(Shelf { title: "Albums".into(), cards: std::mem::take(&mut albums) });
+    shelves.push(Shelf { title: "Singles and EPs".into(), cards: records(session, singles).await });
+    shelves.retain(|s| !s.cards.is_empty());
+    let about = artist.biographies.first().map(|b| plain(&b.text, 420)).unwrap_or_default();
+    Ok(Profile { title: artist.name, followed: None, shelves, about })
+}
+
+/// Albums as cards, newest first as Spotify lists them; what can't be loaded is left out.
+async fn records(session: &Session, uris: Vec<SpotifyUri>) -> Vec<Card> {
+    let load = |uri: SpotifyUri| async move {
+        let album = Album::get(session, &uri).await.inspect_err(|e| log::warn!("album: {e}")).ok()?;
+        let year = album.date.year();
+        let picture = medium(&album.covers).or_else(|| medium(&album.cover_group)).unwrap_or_default();
+        Some(Card { title: album.name, subtitle: if year > 1 { year.to_string() } else { String::new() }, uri: uri.to_uri(), picture })
+    };
+    let found: Vec<Option<Card>> = stream::iter(uris.into_iter().take(PER_SHELF)).map(load).buffered(6).collect().await;
+    found.into_iter().flatten().collect()
+}
+
+/// The picture closest to a card's size, as an image id.
+fn medium(images: &[Image]) -> Option<String> {
+    images.iter().min_by_key(|i| (i.width - 300).abs()).map(|i| i.id.to_base16())
+}
+
+/// Biographies come with links and HTML entities in them; this keeps the words, cut at `limit` characters.
+fn plain(html: &str, limit: usize) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = [("&amp;", "&"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " ")]
+        .iter()
+        .fold(text, |t, (entity, c)| t.replace(entity, c));
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= limit {
+        return text;
+    }
+    let cut: String = text.chars().take(limit).collect();
+    format!("{}…", cut.rsplit_once(' ').map_or(cut.as_str(), |(words, _)| words).trim_end_matches([',', '.', ';', ':']))
 }
 
 fn text(v: &Value) -> String {
@@ -123,6 +190,30 @@ fn activity_in(list: &Value) -> Vec<Card> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn biographies_lose_their_markup_and_stop_at_a_word() {
+        let bio = "<a href=\"spotify:artist:1\">Ana &amp; Bo</a> made   records.\nThen more records";
+        assert_eq!(plain(bio, 100), "Ana & Bo made records. Then more records");
+        assert_eq!(plain(bio, 24), "Ana & Bo made records…");
+        assert_eq!(plain("", 10), "");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the network and a saved login; prints counts only"]
+    async fn artist_page() {
+        use librespot_core::{SessionConfig, cache::Cache};
+        let dir = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
+        let login = Cache::new(Some(&dir), None, None, None).unwrap().credentials().expect("not signed in");
+        let session = Session::new(SessionConfig::default(), None);
+        session.connect(login, false).await.unwrap();
+        let profile = load(&session, "spotify:artist:4tZwfgrHOc3mvqYlEYSvVi", vec![]).await.unwrap();
+        println!("{}: about {} chars", profile.title, profile.about.chars().count());
+        for shelf in &profile.shelves {
+            println!("{}: {} cards, {} with pictures, first {:?}", shelf.title, shelf.cards.len(), shelf.cards.iter().filter(|c| !c.picture.is_empty()).count(), shelf.cards.first().map(|c| (&c.title, &c.subtitle)));
+        }
+        assert!(profile.shelves.len() == 3);
+    }
 
     #[test]
     fn profile_links_are_told_from_searches() {

@@ -166,7 +166,10 @@ component Lyrics inherits Rectangle {
                 clicked => { if (root.synced) { root.seek(i); } }
                 // Timed lyrics: the line being sung is bigger, and the others fade the further away they are.
                 property <int> away: i - root.active;
-                opacity: !root.synced || self.active || self.has-hover ? 1 : max(0.22, 0.62 - (abs(self.away) - 1) * 0.13) * (self.away < 0 ? 0.8 : 1);
+                // Lines fade out over the last 70px at the top and bottom, and a line that doesn't fit is hidden.
+                property <length> shown-y: self.y + flick.content-y;
+                property <float> edge: max(0, min(1, min(self.shown-y, root.height - self.shown-y - self.height) / 70px));
+                opacity: self.edge * (!root.synced || self.active || self.has-hover ? 1 : max(0.22, 0.62 - (abs(self.away) - 1) * 0.13) * (self.away < 0 ? 0.8 : 1));
                 animate opacity { duration: Theme.quick * 2; easing: ease-in-out; }
                 words := Text {
                     x: line-area.indent;
@@ -269,6 +272,7 @@ component Karaoke inherits Rectangle {
         root.started = animation-tick();
         root.gliding = Theme.motion;
     }
+    // 500ms: main.rs starts each line this early, so the glide ends as it is sung.
     property <float> k: root.gliding ? min(1, (animation-tick() - root.started) / 500ms) : 1;
     // Eases in and out, so a line neither starts nor stops with a jolt.
     property <float> pos: root.from + (root.to - root.from) * (root.k < 0.5 ? 4 * root.k * root.k * root.k : 1 - pow(2 - 2 * root.k, 3) / 2);
@@ -434,11 +438,15 @@ export component NowPlaying inherits Rectangle {
     callback toggle-lyrics();
     callback close();
     callback fullscreen();
+    callback window-drag();
+    callback window-maximize();
+    callback controls-changed(bool);
     // Controls fade after a moment without the mouse, but never while paused; karaoke leaves only
     // the cover and the lyrics after five seconds, paused or not.
     property <int> idle;
     property <bool> awake: root.idle < (root.karaoke ? 20 : 12);
     property <bool> controls: root.awake || (!root.playing && !root.karaoke);
+    property <duration> last-press;
     property <length> left: root.lyrics-open ? min(root.width * 0.46, 620px) : root.width;
     property <length> art: min(root.left - 96px, root.height - 330px, 560px);
     property <length> last-x;
@@ -452,6 +460,11 @@ export component NowPlaying inherits Rectangle {
         mouse-cursor: root.controls ? MouseCursor.default : MouseCursor.none;
         // Slint repeats the last position after a relayout, which isn't a real movement.
         pointer-event(e) => {
+            // The empty page moves the window, like the title bar it replaces.
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                if (animation-tick() - root.last-press < 400ms) { root.window-maximize(); } else { root.window-drag(); }
+                root.last-press = animation-tick();
+            }
             if (e.kind != PointerEventKind.move || self.mouse-x != root.last-x || self.mouse-y != root.last-y) {
                 root.last-x = self.mouse-x;
                 root.last-y = self.mouse-y;
@@ -589,9 +602,9 @@ export component NowPlaying inherits Rectangle {
     }
     // Opened by the speaker button, under the buttons; it goes with them when the mouse rests.
     property <bool> volume-open;
-    changed controls => { if (!root.controls) { root.volume-open = false; } }
+    changed controls => { root.controls-changed(root.controls); if (!root.controls) { root.volume-open = false; } }
     if root.volume-open: Glass {
-        x: root.width - 250px;
+        x: root.width - 362px;
         y: 70px;
         width: 236px;
         height: 50px;
@@ -608,7 +621,7 @@ export component NowPlaying inherits Rectangle {
         }
     }
     Glass {
-        x: root.width - 238px;
+        x: root.width - 350px;
         y: 14px;
         width: 224px;
         height: 50px;
