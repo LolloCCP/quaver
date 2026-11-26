@@ -8,6 +8,9 @@ pub const MIN_TINT: f32 = 0.4;
 /// Largest boost or cut of one equalizer band, in dB.
 pub const MAX_GAIN: f32 = 12.;
 
+/// Karaoke's cover styles: square, record, CD, mirrored.
+pub const STAGES: u8 = 4;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub bitrate: u16,
@@ -31,11 +34,13 @@ pub struct Settings {
     pub version: String,
     /// Ask GitHub for new versions at start.
     pub updates: bool,
+    /// How karaoke shows the cover, below STAGES.
+    pub stage: u8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true }
+        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1 }
     }
 }
 
@@ -53,10 +58,10 @@ impl Settings {
     }
 
     fn text(&self) -> String {
-        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version, updates } = self;
+        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version, updates, stage } = self;
         let custom = custom.map(hex).join(",");
         let eq = eq.map(|g| g.to_string()).join(",");
-        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\nupdates={updates}\n")
+        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\nupdates={updates}\nstage={stage}\n")
     }
 
     fn parse(text: &str) -> Self {
@@ -78,6 +83,7 @@ impl Settings {
                 "offline" => s.offline = flag(s.offline),
                 "music" => s.music = value.to_owned(),
                 "version" => s.version = value.trim().to_owned(),
+                "stage" => s.stage = value.parse().ok().filter(|v| *v < STAGES).unwrap_or(s.stage),
                 "updates" => s.updates = flag(s.updates),
                 "eq_on" => s.eq_on = flag(s.eq_on),
                 "tint" => s.tint = value.parse().ok().filter(|t: &f32| t.is_finite()).unwrap_or(s.tint).clamp(MIN_TINT, 0.85),
@@ -133,14 +139,14 @@ mod tests {
 
     #[test]
     fn what_is_saved_is_what_loads() {
-        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, version: "v0.1.2".into(), updates: false, ..Default::default() };
+        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, version: "v0.1.2".into(), updates: false, stage: 3, ..Default::default() };
         s.eq[3] = -4.5;
         assert_eq!(Settings::parse(&s.text()), s);
     }
 
     #[test]
     fn damaged_files_fall_back_to_defaults() {
-        let text = "bitrate=9999\ntint=NaN\ntray=perhaps\ncustom=#12345g,#ffffff\neq=1,2,3\nunknown=1\nnonsense";
+        let text = "stage=9\nbitrate=9999\ntint=NaN\ntray=perhaps\ncustom=#12345g,#ffffff\neq=1,2,3\nunknown=1\nnonsense";
         assert_eq!(Settings::parse(text), Settings::default());
         assert_eq!(parse_hex(" 0A0b0C "), Some([10, 11, 12]));
         for bad in ["", "#", "#fff", "+12345", "#1234567", "ééé"] {

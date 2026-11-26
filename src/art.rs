@@ -543,6 +543,165 @@ pub fn jewel(cover: &Pixels, size: u32, rounding: f32, gloss: f32) -> Pixels {
     out
 }
 
+/// A record or a CD that turns. What stays still is drawn once; each frame only turns the cover on it.
+pub struct Platter {
+    still: Pixels,
+    /// What lies over the turning cover and doesn't turn, like a CD's shine; the UI lays it on top.
+    pub shine: Option<Pixels>,
+    /// The cover, as big as the part of it that shows.
+    label: Pixels,
+    label_radius: f32,
+    hole: f32,
+}
+
+impl Platter {
+    /// A black record with the cover as its label.
+    pub fn vinyl(cover: &Pixels, size: u32) -> Self {
+        let r = size as f32 / 2.;
+        let (label_radius, hole) = (r * 0.36, r * 0.025);
+        let still = paint(size, |d, angle| {
+            let edge = (r - d + 0.5).clamp(0., 1.) * (d - hole + 0.5).clamp(0., 1.);
+            // Fine grooves, a smooth band around the label, and a lighter rim.
+            let mut gray = 15. + 4. * (d * 0.85).sin().abs();
+            if d < label_radius + r * 0.07 {
+                gray = 11.;
+            } else if d > r - 3. {
+                gray = 28.;
+            }
+            // Light from one side catches the grooves in two opposite wedges, and doesn't turn with them.
+            let sheen = (2. * angle - 1.1).cos().max(0.).powi(10) * 62. * (0.25 + 0.75 * d / r);
+            let v = gray + sheen;
+            [v, v, v + 3., edge]
+        });
+        Self { still, shine: None, label: shrink(cover, (label_radius * 2.).ceil() as u32), label_radius, hole }
+    }
+
+    /// The cover printed on a CD, with its clear middle and a rainbow shine.
+    pub fn cd(cover: &Pixels, size: u32) -> Self {
+        let r = size as f32 / 2.;
+        let (hole, hub) = (r * 0.16, r * 0.34);
+        let still = paint(size, |_, _| [0.; 4]);
+        let shine = paint(size, |d, angle| {
+            let inside = (r - d + 0.5).clamp(0., 1.);
+            let line = |at: f32, width: f32| (1. - (d - at).abs() / width).max(0.);
+            let hue = (angle / std::f32::consts::TAU * 2.).fract();
+            let rainbow = [0., 1. / 3., 2. / 3.].map(|o| 140. + 115. * ((hue + o) * std::f32::consts::TAU).cos());
+            let shine = 0.2 * (2. * angle - 0.9).cos().max(0.).powi(3) * (d / r);
+            let clear = if d < hub { 0.2 } else { 0. };
+            let rims = 0.35 * line(r - 1., 1.5) + 0.3 * line(hub, 1.2) + 0.4 * line(hole + 1., 1.5);
+            let a = (shine + clear + rims).min(1.);
+            let w = (rims + clear) / a.max(1e-3);
+            let color: [f32; 3] = std::array::from_fn(|c| rainbow[c] + (255. - rainbow[c]) * w);
+            [color[0], color[1], color[2], a * inside * (d - hole + 0.5).clamp(0., 1.)]
+        });
+        Self { still, shine: Some(shine), label: shrink(cover, size), label_radius: r - 0.5, hole }
+    }
+
+    /// The platter turned by `angle` radians.
+    pub fn frame(&self, angle: f32) -> Pixels {
+        let mut out = self.still.clone();
+        let size = out.width();
+        let c = size as f32 / 2.;
+        let (sin, cos) = angle.sin_cos();
+        let half = self.label.width() as f32 / 2.;
+        let (from, to) = ((c - self.label_radius - 1.).max(0.) as u32, ((c + self.label_radius + 1.) as u32).min(size));
+        let (inner, outer) = ((self.hole + 0.5).powi(2), (self.label_radius + 0.5).powi(2));
+        let solid_to = (self.label_radius - 0.5).max(0.).powi(2);
+        let paint_row = |y: u32, line: &mut [Rgba8Pixel]| {
+            let dy = y as f32 + 0.5 - c;
+            for x in from..to {
+                let dx = x as f32 + 0.5 - c;
+                let d2 = dx * dx + dy * dy;
+                if d2 <= inner || d2 >= outer {
+                    continue;
+                }
+                // Where this point was on the cover before it turned.
+                let [r, g, b, a] = sample(&self.label, dx * cos + dy * sin + half, -dx * sin + dy * cos + half);
+                let pixel = &mut line[x as usize];
+                // Only the rims need the exact distance, for their soft edge.
+                let cover = if d2 > inner + 2. * (self.hole + 0.5) && d2 < solid_to {
+                    1.
+                } else {
+                    let d = d2.sqrt();
+                    (self.label_radius - d + 0.5).clamp(0., 1.) * (d - self.hole + 0.5).clamp(0., 1.)
+                };
+                *pixel = if cover >= 1. && a >= 255. { Rgba8Pixel { r: r as u8, g: g as u8, b: b as u8, a: 255 } } else { over([r, g, b, a / 255. * cover], *pixel) };
+            }
+        };
+        // In a few threads, like the backdrop: a big CD is a lot of pixels sixty times a second.
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4);
+        let rows = ((to - from) as usize).div_ceil(threads).max(1);
+        let region = &mut out.make_mut_slice()[(from * size) as usize..(to * size) as usize];
+        std::thread::scope(|scope| {
+            for (part, lines) in region.chunks_mut(rows * size as usize).enumerate() {
+                let paint_row = &paint_row;
+                scope.spawn(move || {
+                    for (i, line) in lines.chunks_mut(size as usize).enumerate() {
+                        paint_row(from + (part * rows + i) as u32, line);
+                    }
+                });
+            }
+        });
+        out
+    }
+}
+
+/// A cover's mirror image below it, fading out.
+pub fn reflection(cover: &Pixels, size: u32, rounding: f32) -> Pixels {
+    let source = jewel(cover, size, rounding, 0.);
+    let height = (size as f32 * 0.35) as u32;
+    let mut out = Pixels::new(size, height.max(1));
+    for (i, pixel) in out.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = (i as u32 % size, i as u32 / size);
+        let p = source.as_slice()[((size - 1 - y) * size + x) as usize];
+        let fade = (1. - y as f32 / height as f32).powi(2) * 0.3;
+        *pixel = Rgba8Pixel { a: (p.a as f32 * fade) as u8, ..p };
+    }
+    out
+}
+
+/// A square picture from distance to the middle and angle, as straight RGBA with alpha from 0 to 1.
+fn paint(size: u32, f: impl Fn(f32, f32) -> [f32; 4]) -> Pixels {
+    let mut out = Pixels::new(size, size);
+    let c = size as f32 / 2.;
+    for (i, pixel) in out.make_mut_slice().iter_mut().enumerate() {
+        let (dx, dy) = ((i as u32 % size) as f32 + 0.5 - c, (i as u32 / size) as f32 + 0.5 - c);
+        let [r, g, b, a] = f(dx.hypot(dy), dy.atan2(dx));
+        let byte = |v: f32| v.clamp(0., 255.) as u8;
+        *pixel = Rgba8Pixel { r: byte(r), g: byte(g), b: byte(b), a: byte(a * 255.) };
+    }
+    out
+}
+
+/// Bilinear, as 0 to 255 per channel.
+fn sample(p: &Pixels, x: f32, y: f32) -> [f32; 4] {
+    let (w, h) = (p.width() as usize, p.height() as usize);
+    let (x, y) = ((x - 0.5).clamp(0., (w - 1) as f32), (y - 0.5).clamp(0., (h - 1) as f32));
+    let (x0, y0) = (x as usize, y as usize);
+    let (tx, ty) = (x - x0 as f32, y - y0 as f32);
+    let (x1, y1) = ((x0 + 1).min(w - 1) - x0, if y0 + 1 < h { w } else { 0 });
+    let pixels = p.as_slice();
+    let i = y0 * w + x0;
+    let (a, b, c, d) = (pixels[i], pixels[i + x1], pixels[i + y1], pixels[i + y1 + x1]);
+    let mix = |a: u8, b: u8, c: u8, d: u8| {
+        let (a, b, c, d) = (a as f32, b as f32, c as f32, d as f32);
+        let top = a + (b - a) * tx;
+        top + (c + (d - c) * tx - top) * ty
+    };
+    [mix(a.r, b.r, c.r, d.r), mix(a.g, b.g, c.g, d.g), mix(a.b, b.b, c.b, d.b), mix(a.a, b.a, c.a, d.a)]
+}
+
+/// `top` (alpha 0 to 1) laid over `below`, both straight alpha.
+fn over(top: [f32; 4], below: Rgba8Pixel) -> Rgba8Pixel {
+    let (ta, ba) = (top[3].clamp(0., 1.), below.a as f32 / 255.);
+    let a = ta + ba * (1. - ta);
+    if a <= 0. {
+        return Rgba8Pixel { r: 0, g: 0, b: 0, a: 0 };
+    }
+    let mix = |t: f32, b: u8| ((t * ta + b as f32 * ba * (1. - ta)) / a).clamp(0., 255.) as u8;
+    Rgba8Pixel { r: mix(top[0], below.r), g: mix(top[1], below.g), b: mix(top[2], below.b), a: (a * 255.) as u8 }
+}
+
 /// Soft round light, colored and placed by the UI.
 pub fn glow() -> slint::Image {
     const SIZE: u32 = 200;
@@ -664,6 +823,31 @@ mod tests {
         assert_eq!(look(None, &Style::custom([[9, 99, 199], [255; 3]])).edge, [9, 99, 199]);
         let bright = |color| Style::custom([color, [255, 0, 0]]).bright;
         assert!(bright([255, 255, 255]) && bright([250, 220, 120]) && !bright([20, 30, 60]) && !bright([0, 0, 0]));
+    }
+
+    #[test]
+    fn records_turn_their_cover_and_keep_their_shape() {
+        // Left half red, right half blue.
+        let mut cover = solid(220, 20, 20, 64, 64);
+        for (i, p) in cover.make_mut_slice().iter_mut().enumerate() {
+            if i % 64 >= 32 {
+                *p = Rgba8Pixel { r: 20, g: 20, b: 220, a: 255 };
+            }
+        }
+        for platter in [Platter::vinyl(&cover, 100), Platter::cd(&cover, 100)] {
+            let still = platter.frame(0.);
+            let turned = platter.frame(std::f32::consts::PI);
+            let at = |p: &Pixels, x: usize, y: usize| p.as_slice()[y * 100 + x];
+            // Just left of the middle, outside the hole: red, and blue once turned half way.
+            let (a, b) = (at(&still, 36, 50), at(&turned, 36, 50));
+            assert!(a.r as i32 > a.b as i32 + 60 && b.b as i32 > b.r as i32 + 60, "{a:?} {b:?}");
+            // Corners stay clear and the hole shows what is behind.
+            assert_eq!(at(&still, 0, 0).a, 0);
+            assert_eq!(at(&still, 50, 50).a, 0);
+        }
+        let mirror = reflection(&cover, 64, 0.);
+        assert_eq!((mirror.width(), mirror.height()), (64, 22));
+        assert!(mirror.as_slice()[0].a > mirror.as_slice()[64 * 21].a);
     }
 
     #[test]

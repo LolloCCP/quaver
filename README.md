@@ -48,8 +48,9 @@ with it; without them only the chosen song plays. Pressing play in Rustbeat take
 
 ## Karaoke
 
-The microphone button in Now Playing turns on karaoke: timed lyrics one line at a time on a dark stage in the cover's
-colors, each line lit as it is sung. Click a line to go to it.
+The microphone button in Now Playing turns on karaoke, made to be left on a second screen: the cover on one side, in the
+style you pick (cover, a spinning vinyl record, a spinning CD or a mirrored cover), and timed lyrics gliding by on the
+other, the line being sung large and the others small and faded. Click a line to go to it.
 
 ## Friends
 

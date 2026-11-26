@@ -69,6 +69,14 @@ struct Ui {
     cover: Option<art::Pixels>,
     /// Physical pixels the Now Playing cover is shown at.
     cover_size: u32,
+    /// Karaoke's cover: its physical size, the record that turns and how fast, and how far it has turned.
+    stage_size: u32,
+    platter: Option<(art::Platter, f32)>,
+    turn: f32,
+    turned: Instant,
+    spin: slint::Timer,
+    /// Shows the next lyrics line on time; the tick alone comes a few times a second.
+    next_line: slint::Timer,
     track_uri: String,
     tx: UnboundedSender<Cmd>,
     /// Pictures by kind and id; `None` while one is being fetched.
@@ -218,8 +226,10 @@ impl Ui {
     fn set_playback(&mut self, ms: u32, playing: bool) {
         (self.position_ms, self.since, self.playing) = (ms, Instant::now(), playing);
         self.app.set_playing(playing);
+        self.app.global::<Playing>().set_playing(playing);
         self.tray.set_playing(playing);
         self.show_position();
+        self.spin();
         let progress = Some(MediaPosition(Duration::from_millis(ms.into())));
         self.media_update(|m| {
             m.set_playback(if playing { MediaPlayback::Playing { progress } } else { MediaPlayback::Paused { progress } })
@@ -246,8 +256,13 @@ impl Ui {
     }
 
     fn follow_lyrics(&self, now: u32) {
-        self.app.set_lyrics_active(line_at(&self.lyrics, now));
-        self.app.set_lyrics_sweep(sweep(&self.lyrics, now, self.duration_ms));
+        let line = line_at(&self.lyrics, now);
+        self.app.set_lyrics_active(line);
+        match self.lyrics.get((line + 1) as usize) {
+            // A few ms late rather than early, so the line has started when it is shown.
+            Some(next) if self.playing => self.next_line.start(slint::TimerMode::SingleShot, Duration::from_millis((next - now) as u64 + 4), || with_ui(|ui| ui.show_position())),
+            _ => self.next_line.stop(),
+        }
     }
 
     fn want_picture(&mut self, kind: i32, id: String) {
@@ -356,6 +371,7 @@ impl Ui {
         if retint {
             self.repaint_soon();
         }
+        self.spin();
         // A dragged slider changes many times a second; write once it rests.
         self.save.start(slint::TimerMode::SingleShot, Duration::from_millis(600), || with_ui(|ui| ui.save_settings()));
     }
@@ -417,6 +433,7 @@ impl Ui {
         app.set_normalise(s.normalise);
         app.set_tray(s.tray);
         app.set_updates(s.updates);
+        app.set_stage_style(s.stage.into());
         app.global::<Theme>().set_motion(s.motion);
         app.set_soloist(s.soloist);
         app.set_offline(s.offline);
@@ -593,7 +610,10 @@ impl Ui {
         theme.set_dim(color(p.dim));
     }
 
-    fn show_cover(&self) {
+    fn show_cover(&mut self) {
+        if self.app.get_karaoke() {
+            self.draw_stage();
+        }
         if let Some(pixels) = &self.cover {
             let thumb = (THUMB * self.app.window().scale_factor()) as u32;
             self.app.set_thumb(slint::Image::from_rgba8(art::jewel(pixels, thumb, 0.18, self.scene.style.gloss)));
@@ -604,6 +624,59 @@ impl Ui {
             let rounding = 24. * self.app.window().scale_factor() / size.max(1) as f32;
             self.app.set_cover(slint::Image::from_rgba8(art::jewel(pixels, size, rounding, self.scene.style.gloss)));
         }
+    }
+
+    /// Draws karaoke's cover in the chosen style (STAGES), at the size it is shown.
+    fn draw_stage(&mut self) {
+        self.platter = None;
+        let (Some(cover), size) = (self.cover.clone(), self.stage_size) else { return self.spin() };
+        if size == 0 {
+            return;
+        }
+        let gloss = self.scene.style.gloss;
+        let image = slint::Image::from_rgba8;
+        let (art, extra) = match self.shared.lock().stage {
+            1 => {
+                let record = art::Platter::vinyl(&cover, size);
+                let art = record.frame(self.turn);
+                // 33⅓ turns a minute.
+                self.platter = Some((record, 3.49));
+                (art, Some(art::jewel(&cover, size, 0.012, gloss)))
+            }
+            2 => {
+                let cd = art::Platter::cd(&cover, size);
+                let (art, shine) = (cd.frame(self.turn), cd.shine.clone());
+                // Slower than a real one, so the cover on it can still be seen.
+                self.platter = Some((cd, 1.1));
+                (art, shine)
+            }
+            3 => (art::jewel(&cover, size, 0.03, gloss), Some(art::reflection(&cover, size, 0.03))),
+            _ => (art::jewel(&cover, size, 0.03, gloss), None),
+        };
+        self.app.set_stage_art(image(art));
+        self.app.set_stage_extra(extra.map(image).unwrap_or_default());
+        self.spin();
+    }
+
+    /// Turns the record while it can be seen and music plays.
+    fn spin(&mut self) {
+        let wanted = self.platter.is_some() && self.playing && self.app.get_karaoke() && self.app.get_now_playing() && self.app.global::<Theme>().get_motion();
+        if !wanted {
+            return self.spin.stop();
+        }
+        if !self.spin.running() {
+            self.turned = Instant::now();
+            self.spin.start(slint::TimerMode::Repeated, Duration::from_millis(16), || with_ui(Ui::turn));
+        }
+    }
+
+    fn turn(&mut self) {
+        let Some((platter, speed)) = &self.platter else { return self.spin() };
+        // By the time passed, so a slow frame doesn't slow the record.
+        let passed = self.turned.elapsed().as_secs_f32().min(0.1);
+        self.turned = Instant::now();
+        self.turn = (self.turn + passed * speed) % std::f32::consts::TAU;
+        self.app.set_stage_art(slint::Image::from_rgba8(platter.frame(self.turn)));
     }
 
     fn tint_title_bar(&self) {
@@ -830,7 +903,10 @@ impl Ui {
                 }
                 self.set_playback(ms, playing);
             }
-            Event::Stopped => self.set_playback(0, false),
+            Event::Stopped => {
+                self.set_playback(0, false);
+                playing_from(&self.app, "");
+            }
             Event::Volume(v) => app.set_volume(v as f32 / u16::MAX as f32),
             Event::Shuffle(on) => app.set_shuffle(on),
             Event::Repeat(mode) => app.set_repeat(mode.into()),
@@ -879,20 +955,17 @@ fn local_hour() -> u16 {
     time[4]
 }
 
+/// Marks the list songs play from, for the bars beside it in the library and on home.
+// shortcut: only knows lists started in this window, not from the Spotify app; upgrade by reading Connect's context.
+fn playing_from(app: &App, context: &str) {
+    let playing = app.global::<Playing>();
+    playing.set_context(context.into());
+    playing.set_liked(context.ends_with(":collection") || context == local::ALL);
+}
+
 /// Index of the line being sung, -1 before the first.
 fn line_at(starts: &[u32], now: u32) -> i32 {
     starts.partition_point(|start| *start <= now) as i32 - 1
-}
-
-/// How far singing is: the line being sung plus how much of it is done, from -1 before the first.
-/// Rises without jumping back, so the UI can glide between updates.
-fn sweep(starts: &[u32], now: u32, end: u32) -> f32 {
-    /// A line followed by a long pause is sung in this time at most.
-    const LONGEST: u32 = 7000;
-    let line = line_at(starts, now);
-    let from = if line < 0 { 0 } else { starts[line as usize] };
-    let to = starts.get((line + 1) as usize).copied().unwrap_or(end).min(from.saturating_add(LONGEST));
-    line as f32 + (now.saturating_sub(from) as f32 / to.saturating_sub(from).max(1) as f32).min(1.)
 }
 
 /// Feeds the pointer to the UI and turns the wheel into gliding scrolling. This only talks
@@ -1349,7 +1422,12 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(app) = app.upgrade() {
                 app.set_toast(STARTING.into());
                 app.invoke_show_toast();
-                let _ = tx.send(Cmd::Play { context: app.get_list_context().into(), track: uri.into() });
+                let context = app.get_list_context();
+                // The queue has no list of its own: songs go on coming from the one before.
+                if !context.is_empty() {
+                    playing_from(&app, &context);
+                }
+                let _ = tx.send(Cmd::Play { context: context.into(), track: uri.into() });
             }
         }
     });
@@ -1388,9 +1466,27 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(app) = app.upgrade() {
                 app.set_toast(STARTING.into());
                 app.invoke_show_toast();
+                playing_from(&app, &uri);
             }
             let _ = tx.send(Cmd::Play { context: uri.into(), track: String::new() });
         }
+    });
+    app.on_set_stage(|i| with_ui(|ui| {
+        ui.change_settings(|s| s.stage = (i as u8).min(settings::STAGES - 1));
+        ui.draw_stage();
+    }));
+    // These come during layout or while Rust changes the window, so they run afterwards.
+    app.on_stage_resized(|size| {
+        let _ = slint::invoke_from_event_loop(move || with_ui(|ui| {
+            let size = (size * ui.app.window().scale_factor()) as u32;
+            if size != ui.stage_size {
+                ui.stage_size = size;
+                ui.draw_stage();
+            }
+        }));
+    });
+    app.on_stage_changed(|| {
+        let _ = slint::invoke_from_event_loop(|| with_ui(|ui| if ui.app.get_karaoke() && ui.app.get_now_playing() { ui.draw_stage() } else { ui.spin() }));
     });
     app.on_lyrics_wanted(|| {
         let _ = slint::invoke_from_event_loop(|| with_ui(|ui| ui.want_lyrics()));
@@ -1573,6 +1669,12 @@ fn main() -> Result<(), slint::PlatformError> {
         title_bar: [0; 3],
         cover: None,
         cover_size: 0,
+        stage_size: 0,
+        platter: None,
+        turn: 0.,
+        turned: Instant::now(),
+        spin: slint::Timer::default(),
+        next_line: slint::Timer::default(),
         track_uri: String::new(),
         tx,
         pictures: HashMap::new(),
@@ -1653,14 +1755,6 @@ mod tests {
         let starts = [1000, 2000, 2000, 5000];
         assert_eq!([0, 1000, 1999, 2000, 9000].map(|t| super::line_at(&starts, t)), [-1, 0, 0, 2, 3]);
         assert_eq!(super::line_at(&[], 10), -1);
-    }
-
-    #[test]
-    fn singing_sweeps_through_each_line() {
-        let starts = [1000, 2000, 30000];
-        let at = |t| super::sweep(&starts, t, 40000);
-        assert_eq!([0, 500, 1000, 1500, 2000, 5500, 9000, 30000, 33500, 99000].map(at), [-1., -0.5, 0., 0.5, 1., 1.5, 2., 2., 2.5, 3.]);
-        assert_eq!(super::sweep(&[], 500, 0), 0.);
     }
 
     #[test]

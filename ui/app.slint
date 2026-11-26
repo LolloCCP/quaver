@@ -1,9 +1,9 @@
 import { ListView } from "std-widgets.slint";
-import { Theme, Custom, Scene, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
+import { Theme, Custom, Scene, Playing, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
 import { Card, Shelf, HomeView, LibraryItem } from "home.slint";
 import { ThemeCard, Version, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
 
-export { Theme, Custom, Scene, ThemeCard, Version, TrackRow, Card, Shelf }
+export { Theme, Custom, Scene, Playing, ThemeCard, Version, TrackRow, Card, Shelf }
 
 export component App inherits Window {
     title: root.track-title == "" ? "Rustbeat" : root.track-title + " · " + root.track-artist;
@@ -58,8 +58,16 @@ export component App inherits Window {
     in property <int> lyrics-active: -1;
     in property <bool> lyrics-synced;
     in property <string> lyrics-note;
-    in property <float> lyrics-sweep: -1;
     in-out property <bool> karaoke;
+    // Karaoke's cover, drawn in Rust in the chosen style.
+    in property <image> stage-art;
+    in property <image> stage-extra;
+    in property <int> stage-style;
+    callback set-stage(int);
+    callback stage-resized(length);
+    // Whether karaoke's record may have to turn.
+    callback stage-changed();
+    changed karaoke => { root.stage-changed(); }
     out property <bool> lyrics-visible: root.ready && (root.now-playing ? root.lyrics-open || root.karaoke : root.panel-shown);
     in-out property <bool> settings-open;
     property <bool> list-shown: !root.home-open && !root.settings-open;
@@ -231,7 +239,7 @@ export component App inherits Window {
     changed width => { root.repaint(); }
     changed height => { root.repaint(); }
     changed ready => { root.repaint(); }
-    changed now-playing => { root.repaint(); }
+    changed now-playing => { root.repaint(); root.stage-changed(); }
     changed panel-shown => {
         if (!root.panel-shown) { Scene.placed(4, 0, 0, 0, 0); }
     }
@@ -312,8 +320,12 @@ export component App inherits Window {
             lyrics-active: root.lyrics-active;
             lyrics-synced: root.lyrics-synced;
             lyrics-note: root.lyrics-note;
-            lyrics-sweep: root.lyrics-sweep;
             karaoke: root.karaoke;
+            stage-art: root.stage-art;
+            stage-extra: root.stage-extra;
+            stage-style: root.stage-style;
+            set-stage(i) => { root.set-stage(i); }
+            stage-resized(size) => { root.stage-resized(size); }
             toggle-karaoke => { root.karaoke = !root.karaoke; }
             toggle => { root.toggle(); }
             next => { root.next(); }

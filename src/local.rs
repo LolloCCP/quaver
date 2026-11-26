@@ -27,7 +27,7 @@ use crate::{
 };
 
 const EXTENSIONS: [&str; 4] = ["flac", "mp3", "oga", "ogg"];
-const ALL: &str = "local:all";
+pub const ALL: &str = "local:all";
 const ALBUM: &str = "local:album:";
 const SEARCH: &str = "local:search:";
 /// How soon the end of a song is noticed.
