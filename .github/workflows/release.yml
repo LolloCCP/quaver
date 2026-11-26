@@ -34,5 +34,4 @@ jobs:
           if (Test-Path $app\rustbeat.exe) { throw 'not uninstalled' }
       - run: |
           git log -1 --format=%B | Out-File notes.md -Encoding utf8
-          "Code signing policy: https://github.com/LolloCCP/rustbeat#code-signing-policy" | Add-Content notes.md -Encoding utf8
           gh release create $env:RUSTBEAT_VERSION target/release/rustbeat.exe target/release/rustbeatinstaller.exe --target ${{ github.sha }} --title $env:RUSTBEAT_VERSION --notes-file notes.md
