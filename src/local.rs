@@ -362,7 +362,7 @@ impl Player {
     fn announce(&mut self, uri: String) {
         self.now = uri.clone();
         if let Some(song) = self.song(&uri).cloned() {
-            (self.emit)(Event::Track { uri: uri.clone(), title: song.title, artist: song.artist, album: song.album, duration_ms: song.duration_ms, cover_url: None });
+            (self.emit)(Event::Track { uri: uri.clone(), title: song.title, artist: song.artist, artist_uri: String::new(), album: song.album, duration_ms: song.duration_ms, cover_url: None });
         }
         let emit = self.emit.clone();
         tokio::task::spawn_blocking(move || {

@@ -103,7 +103,7 @@ export component Row inherits Rectangle {
             }
             VerticalLayout {
                 alignment: center;
-                Icon { glyph: "\u{e710}"; label: "Add to queue: " + item.title; size: 12px; clicked => { root.enqueue(); } }
+                Icon { glyph: "\u{e710}"; label: "Add to queue: " + item.title; size: 13px; clicked => { root.enqueue(); } }
             }
         }
     }
@@ -249,7 +249,9 @@ component Karaoke inherits Rectangle {
     in property <bool> controls;
     in property <string> title;
     in property <string> artist;
+    in property <string> artist-uri;
     in property <string> album;
+    callback open-artist();
     callback seek(int);
     callback set-style(int);
     callback art-resized(length);
@@ -343,7 +345,7 @@ component Karaoke inherits Rectangle {
             opacity: root.controls ? 1 : 0;
             animate opacity { duration: Theme.quick * 3; }
             Text { text: root.title; color: Theme.text; font-size: 24px; font-weight: 800; horizontal-alignment: center; overflow: elide; }
-            Text { text: root.artist; color: Theme.accent; font-size: 16px; horizontal-alignment: center; overflow: elide; }
+            Link { text: root.artist; linked: root.artist-uri != ""; color: Theme.accent; hover: Theme.text; font-size: 16px; horizontal-alignment: center; clicked => { root.open-artist(); } }
             HorizontalLayout {
                 alignment: center;
                 padding-top: 10px;
@@ -364,7 +366,7 @@ component Karaoke inherits Rectangle {
         opacity: root.controls ? 1 : 0;
         animate opacity { duration: Theme.quick * 3; }
         Text { text: root.title; color: Theme.text.with-alpha(0.75); font-size: 14px; font-weight: 700; overflow: elide; }
-        Text { text: root.artist; color: Theme.accent.with-alpha(0.75); font-size: 12px; overflow: elide; }
+        Link { text: root.artist; linked: root.artist-uri != ""; color: Theme.accent.with-alpha(0.75); hover: Theme.text; font-size: 12px; clicked => { root.open-artist(); } }
     }
 
     lyric := Rectangle {
@@ -400,6 +402,8 @@ component Karaoke inherits Rectangle {
 export component NowPlaying inherits Rectangle {
     in property <string> title;
     in property <string> artist;
+    in property <string> artist-uri;
+    callback open-artist();
     in property <string> album;
     in property <image> cover;
     in property <bool> has-cover;
@@ -517,7 +521,7 @@ export component NowPlaying inherits Rectangle {
             if root.can-save: VerticalLayout { alignment: center; Icon { glyph: root.track-liked ? "\u{eb52}" : "\u{eb51}"; on: root.track-liked; label: root.track-liked ? "Remove from Liked Songs" : "Add to Liked Songs"; clicked => { root.like-playing(); } } }
             if root.can-save: VerticalLayout { alignment: center; Icon { glyph: "\u{ecc8}"; label: "Add to playlist"; clicked => { root.add-playing(); } } }
         }
-        Text { text: root.artist; font-size: 18px; color: Theme.accent; horizontal-alignment: center; overflow: elide; }
+        Link { text: root.artist; linked: root.artist-uri != ""; font-size: 18px; color: Theme.accent; hover: Theme.text; horizontal-alignment: center; clicked => { root.open-artist(); } }
         Text { text: root.album; color: Theme.dim; horizontal-alignment: center; overflow: elide; }
         HorizontalLayout {
             alignment: center;
@@ -574,6 +578,8 @@ export component NowPlaying inherits Rectangle {
         controls: root.controls;
         title: root.title;
         artist: root.artist;
+        artist-uri: root.artist-uri;
+        open-artist => { root.open-artist(); }
         album: root.album;
         seek(i) => { root.seek-line(i); }
         set-style(i) => { root.idle = 0; root.set-stage(i); }

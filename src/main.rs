@@ -909,9 +909,10 @@ impl Ui {
                     app.set_status("Nothing here.".into());
                 }
             }
-            Event::Track { uri, title, artist, album, duration_ms, cover_url } => {
+            Event::Track { uri, title, artist, artist_uri, album, duration_ms, cover_url } => {
                 app.set_track_title(title.as_str().into());
                 app.set_track_artist(artist.as_str().into());
+                app.set_track_artist_uri(artist_uri.into());
                 app.set_track_album(album.as_str().into());
                 app.set_total(clock(duration_ms).into());
                 app.set_has_cover(false);

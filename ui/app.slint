@@ -1,5 +1,5 @@
 import { ListView } from "std-widgets.slint";
-import { Theme, Custom, Scene, Playing, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Transport, Timeline, SearchBox } from "glass.slint";
+import { Theme, Custom, Scene, Playing, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Link, Transport, Timeline, SearchBox } from "glass.slint";
 import { Card, Shelf, HomeView, LibraryItem } from "home.slint";
 import { ThemeCard, Version, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
 
@@ -52,6 +52,7 @@ export component App inherits Window {
     in property <bool> has-more;
     in property <string> track-title;
     in property <string> track-artist;
+    in property <string> track-artist-uri;
     in property <string> track-album;
     in property <bool> has-cover;
     in property <image> cover;
@@ -226,6 +227,11 @@ export component App inherits Window {
         root.home-open = true;
         root.load-home();
     }
+    function open-artist() {
+        root.now-playing = false;
+        root.show-list(root.track-artist-uri, "");
+        root.open(root.track-artist, root.track-artist-uri);
+    }
     public function show-list(uri: string, picture: string) {
         root.settings-open = false;
         root.home-open = false;
@@ -345,6 +351,8 @@ export component App inherits Window {
             height: 100%;
             title: root.track-title;
             artist: root.track-artist;
+            artist-uri: root.track-artist-uri;
+            open-artist => { root.open-artist(); }
             album: root.track-album;
             cover: root.cover;
             has-cover: root.has-cover;
@@ -409,7 +417,7 @@ export component App inherits Window {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 VerticalLayout { alignment: center; Icon { glyph: "\u{e80f}"; label: "Home"; on: root.home-open && !root.settings-open && root.people-title == ""; size: 18px; clicked => { root.go-home(); } } }
-                if !root.offline: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: "Friends"; on: root.home-open && !root.settings-open && root.people-title != ""; size: 18px; clicked => { root.people(""); } } }
+                if !root.offline: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: "Friends"; on: root.home-open && !root.settings-open && root.people-title != "" && !root.people-uri.starts-with("spotify:artist:"); size: 18px; clicked => { root.people(""); } } }
                 VerticalLayout {
                     width: min(480px, root.width * 0.42);
                     alignment: center;
@@ -603,7 +611,7 @@ export component App inherits Window {
                             panel-focus := KeyFocus { activated => { root.now-playing = true; } }
                         }
                         Text { text: root.track-title; color: Theme.text; font-size: 20px; font-weight: 700; wrap: word-wrap; }
-                        Text { text: root.track-artist; color: Theme.accent; wrap: word-wrap; }
+                        Link { text: root.track-artist; wrap: word-wrap; linked: root.track-artist-uri != ""; color: Theme.accent; hover: Theme.text; clicked => { root.open-artist(); } }
                         Text { text: root.track-album; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
                         if root.lyrics-synced && root.lyrics.length > 0: VerticalLayout {
                             padding-top: 10px;
@@ -646,7 +654,7 @@ export component App inherits Window {
                             alignment: center;
                             spacing: 2px;
                             Text { text: root.track-title; color: Theme.text; font-weight: 600; overflow: elide; }
-                            Text { text: root.track-artist; color: Theme.dim; font-size: 12px; overflow: elide; }
+                            Link { text: root.track-artist; linked: root.track-artist-uri != ""; font-size: 12px; clicked => { root.open-artist(); } }
                         }
                         if !root.offline && root.track-title != "": VerticalLayout {
                             alignment: center;
@@ -681,7 +689,7 @@ export component App inherits Window {
                         VerticalLayout { alignment: center; Icon { glyph: "\u{e8bd}"; label: "Open lyrics"; clicked => { root.lyrics-open = true; root.now-playing = true; } } }
                         VerticalLayout { alignment: center; Icon { glyph: "\u{e8fd}"; label: "Up next"; on: root.list-shown && root.list-title == "Up next"; clicked => { root.show-list("", ""); root.queue(); } } }
                         if root.width >= 1160px: VerticalLayout { alignment: center; Icon { glyph: "\u{e90d}"; label: root.panel-open ? "Close the now playing panel" : "Open the now playing panel"; on: root.panel-shown; clicked => { root.panel-open = !root.panel-open; } } }
-                        Text { width: 26px; text: "\u{e767}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; horizontal-alignment: right; }
+                        Text { width: 26px; text: root.volume <= 0 ? "\u{e74f}" : "\u{e767}"; font-family: Theme.icons; color: Theme.dim; vertical-alignment: center; horizontal-alignment: right; }
                         VerticalLayout {
                             width: 104px;
                             alignment: center;

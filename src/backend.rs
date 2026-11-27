@@ -123,7 +123,7 @@ pub enum Event {
     List { title: String, context: String },
     Rows(Vec<Row>),
     ListDone,
-    Track { uri: String, title: String, artist: String, album: String, duration_ms: u32, cover_url: Option<String> },
+    Track { uri: String, title: String, artist: String, artist_uri: String, album: String, duration_ms: u32, cover_url: Option<String> },
     Cover { uri: String, bytes: Vec<u8> },
     /// Several images make a mosaic; none means it could not be fetched.
     Picture { kind: i32, id: String, images: Vec<Vec<u8>> },
@@ -869,15 +869,17 @@ impl Library {
     }
 
     fn track_changed(&self, item: AudioItem) {
-        let (artist, album) = match item.unique_fields {
-            UniqueFields::Track { artists, album, .. } => {
-                (artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "), album)
-            }
-            UniqueFields::Episode { show_name, .. } => (show_name, String::new()),
-            UniqueFields::Local { artists, album, .. } => (artists.unwrap_or_default(), album.unwrap_or_default()),
+        let (artist, artist_uri, album) = match item.unique_fields {
+            UniqueFields::Track { artists, album, .. } => (
+                artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "),
+                artists.first().map(|a| a.id.to_uri()).unwrap_or_default(),
+                album,
+            ),
+            UniqueFields::Episode { show_name, .. } => (show_name, String::new(), String::new()),
+            UniqueFields::Local { artists, album, .. } => (artists.unwrap_or_default(), String::new(), album.unwrap_or_default()),
         };
         let cover_url = item.covers.into_iter().max_by_key(|c| c.width).map(|c| c.url);
-        (self.emit)(Event::Track { uri: item.uri.clone(), title: item.name, artist, album, duration_ms: item.duration_ms, cover_url: cover_url.clone() });
+        (self.emit)(Event::Track { uri: item.uri.clone(), title: item.name, artist, artist_uri, album, duration_ms: item.duration_ms, cover_url: cover_url.clone() });
         if let Some(url) = cover_url {
             self.load_cover(item.uri, url);
         }

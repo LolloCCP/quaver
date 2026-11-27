@@ -599,6 +599,7 @@ impl Player {
             uri: uri.to_owned(),
             title: name(item),
             artist: artists.join(", "),
+            artist_uri: facts["creators"][0]["entity"]["uri"].as_str().unwrap_or_default().to_owned(),
             album: name(&facts["parent"]["entity"]),
             duration_ms: facts["playback"]["duration_ms"].as_u64().unwrap_or(0) as u32,
             cover_url: cover(item),
