@@ -13,6 +13,10 @@ export component App inherits Window {
     in property <bool> is-maximized;
     // False while karaoke hides everything but the cover and the lyrics.
     in-out property <bool> chrome-shown: true;
+    // The pointer's own cursor setting only takes effect on the next movement, so the window hides it.
+    property <bool> cursor-hidden: !root.chrome-shown && root.now-playing;
+    changed cursor-hidden => { root.cursor-hidden-changed(root.cursor-hidden); }
+    callback cursor-hidden-changed(bool);
     callback window-drag();
     callback window-resize(int);
     callback window-minimize();
@@ -105,6 +109,7 @@ export component App inherits Window {
     in property <bool> normalise;
     in property <bool> tray;
     in property <bool> updates;
+    in property <bool> gpu;
     in property <bool> needs-restart;
     in property <bool> soloist;
     in property <string> player-note;
@@ -198,6 +203,7 @@ export component App inherits Window {
     callback set-updates(bool);
     callback set-tint(float);
     callback set-motion(bool);
+    callback set-gpu(bool);
     callback glide(float);
     in property <float> bounce;
 
@@ -540,6 +546,7 @@ export component App inherits Window {
                                 normalise: root.normalise;
                                 tray: root.tray;
                                 updates: root.updates;
+                                gpu: root.gpu;
                                 needs-restart: root.needs-restart;
                                 soloist: root.soloist;
                                 player-note: root.player-note;
@@ -580,6 +587,7 @@ export component App inherits Window {
                                 set-updates(v) => { root.set-updates(v); }
                                 set-tint(v) => { root.set-tint(v); }
                                 set-motion(v) => { root.set-motion(v); }
+                                set-gpu(v) => { root.set-gpu(v); }
                                 logout => { root.settings-open = false; root.logout(); }
                             }
                         }

@@ -463,6 +463,7 @@ impl Ui {
         app.set_normalise(s.normalise);
         app.set_tray(s.tray);
         app.set_updates(s.updates);
+        app.set_gpu(s.gpu);
         app.set_stage_style(s.stage.into());
         app.global::<Theme>().set_motion(s.motion);
         app.set_soloist(s.soloist);
@@ -1266,6 +1267,10 @@ fn main() -> Result<(), slint::PlatformError> {
     let settings = Settings::load(&settings_path);
     let shared = Arc::new(Shared::new(settings.clone()));
 
+    // Without this Slint picks the GPU itself, and falls back to software when it can't.
+    if !settings.gpu {
+        slint::BackendSelector::new().backend_name("winit".into()).renderer_name("software".into()).select()?;
+    }
     let app = App::new()?;
     let tray = Tray::new()?;
     let rows = Rc::new(VecModel::default());
@@ -1529,6 +1534,12 @@ fn main() -> Result<(), slint::PlatformError> {
         }));
     });
     // Rustbeat's own title bar: it moves, resizes and sizes the window the way the Windows one did.
+    app.on_cursor_hidden_changed({
+        let app = app.as_weak();
+        move |hidden| if let Some(app) = app.upgrade() {
+            app.window().with_winit_window(|w| w.set_cursor_visible(!hidden));
+        }
+    });
     app.on_window_drag({
         let app = app.as_weak();
         move || if let Some(app) = app.upgrade() {
@@ -1717,6 +1728,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     app.on_soloist_get_key(|| open("https://developer.spotify.com/dashboard/soloist".as_ref()));
     app.on_set_motion(|on| with_ui(|ui| ui.change_settings(|s| s.motion = on)));
+    app.on_set_gpu(|on| with_ui(|ui| ui.change_settings(|s| s.gpu = on)));
     app.on_set_tray(|on| with_ui(|ui| ui.change_settings(|s| s.tray = on)));
     app.on_set_updates({
         let data_dir = data_dir.clone();

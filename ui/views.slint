@@ -646,6 +646,16 @@ export component NowPlaying inherits Rectangle {
     }
 }
 
+component VersionRow inherits HorizontalLayout {
+    in property <Version> v;
+    in property <bool> updating;
+    callback use(string);
+    spacing: 12px;
+    Text { width: 80px; text: root.v.tag; color: root.v.used ? Theme.accent : Theme.text; vertical-alignment: center; overflow: elide; }
+    Text { text: root.v.about; color: Theme.dim; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+    VerticalLayout { alignment: center; Pill { quiet: true; enabled: !root.updating && !root.v.used; selected: root.v.used; text: root.v.used ? "In use" : "Use"; clicked => { root.use(root.v.tag); } } }
+}
+
 component Section inherits VerticalLayout {
     in property <string> text;
     spacing: 10px;
@@ -662,6 +672,7 @@ export component SettingsView inherits ScrollView {
     in property <bool> normalise;
     in property <bool> tray;
     in property <bool> updates;
+    in property <bool> gpu;
     in property <bool> needs-restart;
     in property <bool> soloist;
     in property <bool> soloist-here;
@@ -674,6 +685,7 @@ export component SettingsView inherits ScrollView {
     in property <string> version;
     in property <[Version]> versions;
     in property <bool> version-chosen;
+    property <bool> older-open;
     in property <bool> updating;
     in property <bool> update-ready;
     in property <string> update-note;
@@ -705,6 +717,7 @@ export component SettingsView inherits ScrollView {
     callback set-updates(bool);
     callback set-tint(float);
     callback set-motion(bool);
+    callback set-gpu(bool);
     callback logout();
     property <[string]> labels: ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
     content-width: self.visible-width;
@@ -754,6 +767,7 @@ export component SettingsView inherits ScrollView {
                 ColorPicker { horizontal-stretch: 1; label: "Highlights"; color: Custom.highlight; picked(c) => { Custom.picked(1, c); } typed(t) => { Custom.typed(1, t); } }
             }
             Switch { text: "Motion effects"; note: "Animations, pointer light and gliding scrolling"; checked: Theme.motion; toggled(on) => { root.set-motion(on); } }
+            Switch { text: "Hardware acceleration"; note: "Smoother movement, drawn by the graphics card. Applies after a restart"; checked: root.gpu; toggled(on) => { root.set-gpu(on); } }
         }
         Section {
             text: "Player";
@@ -845,11 +859,12 @@ export component SettingsView inherits ScrollView {
             }
             if root.update-note != "": Text { text: root.update-note; color: Theme.accent; wrap: word-wrap; }
             if root.update-ready: HorizontalLayout { alignment: start; Pill { quiet: true; text: "Restart now"; clicked => { root.restart(); } } }
-            for v in root.versions: HorizontalLayout {
-                spacing: 12px;
-                Text { width: 80px; text: v.tag; color: v.used ? Theme.accent : Theme.text; vertical-alignment: center; overflow: elide; }
-                Text { text: v.about; color: Theme.dim; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
-                VerticalLayout { alignment: center; Pill { quiet: true; enabled: !root.updating && !v.used; selected: v.used; text: v.used ? "In use" : "Use"; clicked => { root.use-version(v.tag); } } }
+            // GitHub lists the newest first; the rest open below it.
+            if root.versions.length > 0: VersionRow { v: root.versions[0]; updating: root.updating; use(tag) => { root.use-version(tag); } }
+            if root.versions.length > 1: HorizontalLayout { alignment: start; Pill { quiet: true; text: root.older-open ? "Hide older versions" : "Show older versions"; clicked => { root.older-open = !root.older-open; } } }
+            if root.older-open: VerticalLayout {
+                spacing: 10px;
+                for i in root.versions.length - 1: VersionRow { v: root.versions[i + 1]; updating: root.updating; use(tag) => { root.use-version(tag); } }
             }
         }
         Section {

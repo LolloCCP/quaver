@@ -1,6 +1,6 @@
 # Rustbeat
 
-A small native Spotify client for Windows: Rust, Slint (software rendered, no browser engine) and librespot.
+A small native Spotify client for Windows: Rust, Slint (GPU rendered with OpenGL, software fallback; no browser engine) and librespot.
 
 > **Unofficial.** Rustbeat is not affiliated with, endorsed by or approved by Spotify. It reads your library through
 > [librespot](https://github.com/librespot-org/librespot) and undocumented Spotify addresses, which Spotify may change,

@@ -36,11 +36,13 @@ pub struct Settings {
     pub updates: bool,
     /// How karaoke shows the cover, below STAGES.
     pub stage: u8,
+    /// Draw with the graphics card; read only at start.
+    pub gpu: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1 }
+        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1, gpu: true }
     }
 }
 
@@ -58,10 +60,10 @@ impl Settings {
     }
 
     fn text(&self) -> String {
-        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version, updates, stage } = self;
+        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version, updates, stage, gpu } = self;
         let custom = custom.map(hex).join(",");
         let eq = eq.map(|g| g.to_string()).join(",");
-        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\nupdates={updates}\nstage={stage}\n")
+        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\nupdates={updates}\nstage={stage}\ngpu={gpu}\n")
     }
 
     fn parse(text: &str) -> Self {
@@ -85,6 +87,7 @@ impl Settings {
                 "version" => s.version = value.trim().to_owned(),
                 "stage" => s.stage = value.parse().ok().filter(|v| *v < STAGES).unwrap_or(s.stage),
                 "updates" => s.updates = flag(s.updates),
+                "gpu" => s.gpu = flag(s.gpu),
                 "eq_on" => s.eq_on = flag(s.eq_on),
                 "tint" => s.tint = value.parse().ok().filter(|t: &f32| t.is_finite()).unwrap_or(s.tint).clamp(MIN_TINT, 0.85),
                 "eq" => {
@@ -139,7 +142,7 @@ mod tests {
 
     #[test]
     fn what_is_saved_is_what_loads() {
-        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, version: "v0.1.2".into(), updates: false, stage: 3, ..Default::default() };
+        let mut s = Settings { bitrate: 96, normalise: true, tray: false, tint: 0.5, motion: false, theme: "paper".into(), custom: [[0, 1, 2], [253, 254, 255]], soloist: true, offline: true, music: r"D:\My music=loud, été".into(), eq_on: true, version: "v0.1.2".into(), updates: false, stage: 3, gpu: false, ..Default::default() };
         s.eq[3] = -4.5;
         assert_eq!(Settings::parse(&s.text()), s);
     }
