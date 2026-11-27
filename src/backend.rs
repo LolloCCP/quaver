@@ -79,6 +79,14 @@ pub enum Cmd {
     /// Makes a playlist, with `track` in it unless that is empty.
     NewPlaylist { name: String, track: String },
     AddToPlaylist { playlist: String, name: String, track: String },
+    /// Read a playlist's name and settings, for the edit dialog.
+    PlaylistDetails(String),
+    SetPlaylistDetails { playlist: String, old: library::Details, new: library::Details },
+    DeletePlaylist { playlist: String, name: String },
+    /// A song by its URI and how many times it is in the list before (see `library::Song`).
+    RemoveSong { playlist: String, uri: String, nth: usize },
+    /// Moves a song to the place of another.
+    MoveSong { playlist: String, uri: String, nth: usize, other: String, other_nth: usize },
     /// Fetch a picture; `kind` only comes back with it.
     Picture { kind: i32, id: String },
     /// Fetch the lyrics of a track by its URI.
@@ -111,6 +119,9 @@ pub enum Event {
     Playlists(Vec<Card>),
     /// The playlists songs can be added to: one's own and collaborative ones.
     Editable(Vec<String>),
+    /// The playlists of one's own, which can be renamed and deleted.
+    Owned(Vec<String>),
+    PlaylistDetails { uri: String, details: library::Details },
     /// Every liked song, once loaded.
     Liked(Vec<String>),
     LikeChanged { uri: String, on: bool },
@@ -746,6 +757,53 @@ impl Library {
                     }));
                 });
             }
+            Cmd::PlaylistDetails(uri) => {
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    emit(match library::details(&session, &uri).await {
+                        Ok(details) => Event::PlaylistDetails { uri, details },
+                        Err(e) => Event::Status(format!("The playlist could not be read: {}", e.error)),
+                    });
+                });
+            }
+            Cmd::SetPlaylistDetails { playlist, old, new } => {
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    emit(Event::Status(match library::set_details(&session, &playlist, &old, &new).await {
+                        Ok(()) => format!("Saved “{}”.", new.name.trim()),
+                        Err(e) => format!("That didn't work: {}", e.error),
+                    }));
+                    let _ = load_playlists(session, emit).await;
+                });
+            }
+            Cmd::DeletePlaylist { playlist, name } => {
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    emit(Event::Status(match library::delete_playlist(&session, &playlist).await {
+                        Ok(()) => format!("Deleted “{name}”."),
+                        Err(e) => format!("That didn't work: {}", e.error),
+                    }));
+                    let _ = load_playlists(session, emit).await;
+                });
+            }
+            Cmd::RemoveSong { playlist, uri, nth } => {
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    // The row is already gone; only a failure needs saying.
+                    if let Err(e) = library::remove_song(&session, &playlist, &library::Song { uri: &uri, nth }).await {
+                        emit(Event::Status(format!("The song could not be removed: {}. Open the playlist again to see it as it is.", e.error)));
+                    }
+                });
+            }
+            Cmd::MoveSong { playlist, uri, nth, other, other_nth } => {
+                let (session, emit) = (self.session.clone(), self.emit.clone());
+                tokio::spawn(async move {
+                    let (song, other) = (library::Song { uri: &uri, nth }, library::Song { uri: &other, nth: other_nth });
+                    if let Err(e) = library::move_song(&session, &playlist, &song, &other).await {
+                        emit(Event::Status(format!("The song could not be moved: {}. Open the playlist again to see it as it is.", e.error)));
+                    }
+                });
+            }
             Cmd::Follow { uri, on } => {
                 let (session, emit) = (self.session.clone(), self.emit.clone());
                 tokio::spawn(async move {
@@ -921,15 +979,16 @@ async fn load_lyrics(session: &Session, uri: &str) -> Result<(bool, Vec<(u32, St
 }
 
 async fn load_playlists(session: Session, emit: Emit) -> Result<(), Error> {
-    let (cards, editable) = playlists(&session).await?;
+    let (cards, editable, owned) = playlists(&session).await?;
     emit(Event::Playlists(cards));
     emit(Event::Editable(editable));
+    emit(Event::Owned(owned));
     Ok(())
 }
 
-/// The library's playlists, and which of them songs can be added to.
-async fn playlists(session: &Session) -> Result<(Vec<Card>, Vec<String>), Error> {
-    let (mut playlists, mut editable) = (Vec::new(), Vec::new());
+/// The library's playlists, which of them songs can be added to, and which are one's own.
+async fn playlists(session: &Session) -> Result<(Vec<Card>, Vec<String>, Vec<String>), Error> {
+    let (mut playlists, mut editable, mut owned) = (Vec::new(), Vec::new(), Vec::new());
     let user = session.username();
     let mut from = 0;
     loop {
@@ -937,17 +996,23 @@ async fn playlists(session: &Session) -> Result<(Vec<Card>, Vec<String>), Error>
         let count = list.contents.items.len();
         playlists.extend(playlists_in(&list));
         editable.extend(editable_in(&list, &user));
+        owned.extend(owned_in(&list, &user));
         from += count;
         if count == 0 || from >= list.length() as usize {
             break;
         }
     }
-    Ok((playlists, editable))
+    Ok((playlists, editable, owned))
 }
 
 fn editable_in(list: &SelectedListContent, user: &str) -> Vec<String> {
     let items = list.contents.items.iter().zip(&list.contents.meta_items);
     items.filter(|(item, meta)| item.uri().contains(":playlist:") && (meta.owner_username() == user || meta.attributes.collaborative())).map(|(item, _)| item.uri().to_owned()).collect()
+}
+
+fn owned_in(list: &SelectedListContent, user: &str) -> Vec<String> {
+    let items = list.contents.items.iter().zip(&list.contents.meta_items);
+    items.filter(|(item, meta)| item.uri().contains(":playlist:") && meta.owner_username() == user).map(|(item, _)| item.uri().to_owned()).collect()
 }
 
 const BLEND: &str = "Blend";
@@ -1221,6 +1286,8 @@ mod tests {
         assert_eq!(playlists_in(&list), [Card { title: "Mix".into(), subtitle: "Playlist".into(), uri: "spotify:playlist:x".into(), picture: String::new() }]);
         list.contents.mut_or_insert_default().meta_items[1].set_owner_username("me".into());
         assert_eq!(editable_in(&list, "me"), ["spotify:playlist:x"]);
+        assert_eq!(owned_in(&list, "me"), ["spotify:playlist:x"]);
+        assert!(owned_in(&list, "someone else").is_empty());
         assert!(editable_in(&list, "someone else").is_empty());
     }
 

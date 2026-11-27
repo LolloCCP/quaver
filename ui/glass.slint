@@ -601,6 +601,7 @@ export component SearchBox inherits Rectangle {
     callback accepted(string);
     callback edited(string);
     public function take-focus() { input.focus(); }
+    public function set-text(text: string) { input.text = text; }
     height: 42px;
     border-radius: 21px;
     background: @linear-gradient(180deg, Theme.bright ? #0000000f : #00000040 0%, Theme.bright ? #00000008 : #ffffff1a 100%);

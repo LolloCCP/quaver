@@ -1,5 +1,5 @@
 import { ListView } from "std-widgets.slint";
-import { Theme, Custom, Scene, Playing, Backdrop, Glass, KeyFocus, Icon, Pill, PlayButton, Bar, Cover, Link, Transport, Timeline, SearchBox } from "glass.slint";
+import { Theme, Custom, Scene, Playing, Backdrop, Glass, KeyFocus, Icon, Pill, Switch, PlayButton, Bar, Cover, Link, Transport, Timeline, SearchBox } from "glass.slint";
 import { Card, Shelf, HomeView, LibraryItem } from "home.slint";
 import { ThemeCard, Version, TrackRow, Row, NowPlaying, SettingsView } from "views.slint";
 
@@ -87,6 +87,19 @@ export component App inherits Window {
     in property <[Card]> picker-lists;
     callback new-playlist(string, string);
     callback add-to-playlist(string, string, string);
+    // The open list: whether its songs can be moved and taken out, and whether it is one's own.
+    in property <bool> list-editable;
+    in property <bool> list-own;
+    in-out property <bool> edit-open;
+    in property <string> edit-name;
+    in property <string> edit-description;
+    in property <bool> edit-collaborative;
+    in property <bool> edit-public;
+    callback edit-playlist();
+    callback save-playlist(string, string, bool, bool);
+    callback delete-playlist();
+    callback remove-song(int);
+    callback move-song(int, int);
     // Karaoke's cover, drawn in Rust in the chosen style.
     in property <image> stage-art;
     in property <image> stage-extra;
@@ -300,6 +313,7 @@ export component App inherits Window {
             if (e.text == Key.Escape) {
                 // The playlist chooser is on top of everything, so it closes first.
                 if (root.picker-open) { root.picker-open = false; return accept; }
+                if (root.edit-open) { root.edit-open = false; return accept; }
                 root.now-playing = false;
                 root.settings-open = false;
                 root.leave-fullscreen();
@@ -318,14 +332,19 @@ export component App inherits Window {
         }
 
         // The top strip moves the window; two presses in a row maximize it, as the title bar did.
+        // The drag starts only once the pointer moves: winit stops all drags and resizes for good
+        // after one that Windows never ran, as a plain click would be.
         TouchArea {
+            // Without y, Slint centres it in the window.
+            y: 0;
             height: 58px;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                    if (animation-tick() - root.last-press < 400ms) { root.window-maximize(); } else { root.window-drag(); }
+                    if (animation-tick() - root.last-press < 400ms) { root.window-maximize(); }
                     root.last-press = animation-tick();
                 }
             }
+            moved => { if (abs(self.mouse-x - self.pressed-x) > 3px || abs(self.mouse-y - self.pressed-y) > 3px) { root.window-drag(); } }
         }
 
         if !root.ready: VerticalLayout {
@@ -485,6 +504,7 @@ export component App inherits Window {
                             if root.tall && !root.settings-open && root.list-has-picture: VerticalLayout { alignment: center; Image { source: root.list-picture; width: 88px; height: 88px; } }
                             Text { text: root.settings-open ? "Settings" : root.list-title; font-size: root.tall ? 42px : 28px; font-weight: 700; color: Theme.text; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; animate font-size { duration: Theme.quick * 1.5; easing: ease-in-out; } }
                             if !root.settings-open && root.list-title == "Up next": VerticalLayout { alignment: center; Pill { quiet: true; text: "Clear queue"; clicked => { root.clear-queue(); } } }
+                            if !root.settings-open && root.list-own: VerticalLayout { alignment: center; Pill { quiet: true; text: "Edit"; clicked => { root.edit-playlist(); } } }
                             // Aims past the top: the list shifts a little while rows come and go on the way.
                             if !root.settings-open && root.scrolled > 900px: VerticalLayout { alignment: center; Icon { glyph: "\u{e74a}"; label: "Back to top"; clicked => { if (Theme.motion) { root.glide(root.scrolled / 1px * 1.2 + 100); } else { root.reset-scroll(); } } } }
                             if !root.settings-open && root.rows.length > 0: VerticalLayout { alignment: center; PlayButton { size: 50px; clicked => { root.play(root.rows[0].uri); } } }
@@ -524,6 +544,12 @@ export component App inherits Window {
                                     play => { root.play(r.uri); }
                                     enqueue => { root.enqueue(r.uri); }
                                     can-save: !root.offline;
+                                    editable: root.list-editable;
+                                    first: i == 0;
+                                    last: i == root.rows.length - 1;
+                                    remove => { root.remove-song(i); }
+                                    move-up => { root.move-song(i, i - 1); }
+                                    move-down => { root.move-song(i, i + 1); }
                                     like(on) => { root.like(r.uri, on); }
                                     add-to => { root.choose-playlist(r.uri); }
                                     open(name, uri) => { root.show-list(uri, ""); root.open(name, uri); }
@@ -766,6 +792,67 @@ export component App inherits Window {
             }
         }
 
+        // A playlist's name and settings, and deleting it.
+        if root.edit-open && root.ready: edit-dialog := Rectangle {
+            width: root.width;
+            height: root.height;
+            background: #00000066;
+            property <bool> collaborative: root.edit-collaborative;
+            property <bool> public: root.edit-public;
+            // Deleting takes a second press.
+            property <bool> deleting;
+            TouchArea { clicked => { root.edit-open = false; } }
+            Rectangle {
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2;
+                width: min(460px, root.width - 40px);
+                height: edit-box.preferred-height;
+                border-radius: 18px;
+                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
+                border-width: 1px;
+                border-color: Theme.hover-line;
+                TouchArea { }
+                edit-box := VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        Text { text: "Edit playlist"; color: Theme.text; font-size: 20px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                        Icon { glyph: "\u{e711}"; label: "Close"; size: 12px; clicked => { root.edit-open = false; } }
+                    }
+                    edit-name := SearchBox {
+                        placeholder: "Name";
+                        glyph: "\u{e70f}";
+                        init => { self.set-text(root.edit-name); self.take-focus(); }
+                    }
+                    edit-about := SearchBox {
+                        placeholder: "Add a description (optional)";
+                        glyph: "\u{e8d2}";
+                        init => { self.set-text(root.edit-description); }
+                    }
+                    Switch { text: "Collaborative"; note: "People you share it with can add songs."; checked: edit-dialog.collaborative; toggled(on) => { edit-dialog.collaborative = on; } }
+                    Switch { text: "On your profile"; note: "Others can find it on your page."; checked: edit-dialog.public; toggled(on) => { edit-dialog.public = on; } }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Pill {
+                            quiet: true;
+                            text: edit-dialog.deleting ? "Really delete it?" : "Delete";
+                            clicked => {
+                                if (edit-dialog.deleting) { root.delete-playlist(); root.edit-open = false; root.go-home(); }
+                                edit-dialog.deleting = true;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Pill { quiet: true; text: "Cancel"; clicked => { root.edit-open = false; } }
+                        Pill {
+                            text: "Save";
+                            enabled: edit-name.value != "";
+                            clicked => { root.save-playlist(edit-name.value, edit-about.value, edit-dialog.collaborative, edit-dialog.public); root.edit-open = false; }
+                        }
+                    }
+                }
+            }
+        }
+
         if root.jam-open && root.ready && !root.now-playing: Rectangle {
             width: root.width;
             height: root.height;
@@ -884,7 +971,8 @@ export component App inherits Window {
             width: side.w;
             height: side.h;
             mouse-cursor: side.c;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.window-resize(side.d); } }
+            // On the first movement, as with the drag strip above.
+            moved => { root.window-resize(side.d); }
         }
     }
 }

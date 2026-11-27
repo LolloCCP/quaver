@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use http::{HeaderMap, HeaderValue, Method, header::{ACCEPT, CONTENT_TYPE}};
 use librespot_core::{Error, Session};
 use librespot_protocol::playlist4_external::{
-    Add, ChangeInfo, CreateListReply, Delta, Item, ItemAttributes, ListAttributes, ListAttributesPartialState, ListChanges, ListUpdateRequest, Op,
-    UpdateListAttributes, op::Kind,
+    Add, ChangeInfo, CreateListReply, Delta, Item, ItemAttributes, ItemAttributesPartialState, ListAttributeKind, ListAttributes, ListAttributesPartialState,
+    ListChanges, ListUpdateRequest, Mov, Op, Rem, SelectedListContent, UpdateItemAttributes, UpdateListAttributes, op::Kind,
 };
 use protobuf::{Message, MessageField};
 
@@ -184,27 +184,17 @@ fn added(user: &str, uris: &[&str], first: bool) -> ListChanges {
     let mut op = Op::new();
     op.set_kind(Kind::ADD);
     op.add = MessageField::some(add);
-    let mut info = ChangeInfo::new();
-    info.set_user(user.to_owned());
-    info.set_timestamp(now);
-    let mut delta = Delta::new();
-    delta.ops.push(op);
-    delta.info = MessageField::some(info);
-    let mut changes = ListChanges::new();
-    changes.deltas.push(delta);
-    changes
+    changes(user, op, None)
 }
 
 fn renamed(user: &str, name: &str) -> ListChanges {
     let mut attributes = ListAttributes::new();
     attributes.set_name(name.trim().to_owned());
-    let mut state = ListAttributesPartialState::new();
-    state.values = MessageField::some(attributes);
-    let mut update = UpdateListAttributes::new();
-    update.new_attributes = MessageField::some(state);
-    let mut op = Op::new();
-    op.set_kind(Kind::UPDATE_LIST_ATTRIBUTES);
-    op.update_list_attributes = MessageField::some(update);
+    changes(user, attributes_op(attributes, vec![]), None)
+}
+
+/// One change by `user`, made on top of `revision` when that is known.
+fn changes(user: &str, op: Op, revision: Option<&[u8]>) -> ListChanges {
     let mut info = ChangeInfo::new();
     info.set_user(user.to_owned());
     info.set_timestamp(now_ms());
@@ -212,8 +202,188 @@ fn renamed(user: &str, name: &str) -> ListChanges {
     delta.ops.push(op);
     delta.info = MessageField::some(info);
     let mut changes = ListChanges::new();
+    if let Some(revision) = revision {
+        changes.set_base_revision(revision.to_vec());
+    }
     changes.deltas.push(delta);
     changes
+}
+
+/// Sets the list's attributes in `values`; those in `cleared` are emptied.
+fn attributes_op(values: ListAttributes, cleared: Vec<ListAttributeKind>) -> Op {
+    let mut state = ListAttributesPartialState::new();
+    state.values = MessageField::some(values);
+    state.no_value = cleared.into_iter().map(Into::into).collect();
+    let mut update = UpdateListAttributes::new();
+    update.new_attributes = MessageField::some(state);
+    let mut op = Op::new();
+    op.set_kind(Kind::UPDATE_LIST_ATTRIBUTES);
+    op.update_list_attributes = MessageField::some(update);
+    op
+}
+
+/// What the edit dialog shows and changes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Details {
+    pub name: String,
+    pub description: String,
+    pub collaborative: bool,
+    /// Shown on one's profile.
+    pub public: bool,
+}
+
+/// A playlist's items from `from` on, with its revision and full length.
+async fn items(session: &Session, id: &str, from: usize) -> Result<SelectedListContent, Error> {
+    let path = format!("/playlist/v2/playlist/{id}?decorate=revision,attributes,length&from={from}&length={PAGE}");
+    Ok(SelectedListContent::parse_from_bytes(&session.spclient().request(&Method::GET, &path, None, None).await?)?)
+}
+
+const PAGE: usize = 500;
+
+/// The page of the library's own list that has `playlist`, and its place in the whole list and in the page.
+async fn in_rootlist(session: &Session, playlist: &str) -> Result<(SelectedListContent, usize, usize), Error> {
+    let mut from = 0;
+    loop {
+        let root = SelectedListContent::parse_from_bytes(&session.spclient().get_rootlist(from, Some(PAGE)).await?)?;
+        if let Some(i) = root.contents.items.iter().position(|i| i.uri() == playlist) {
+            return Ok((root, from + i, i));
+        }
+        from += root.contents.items.len();
+        if root.contents.items.is_empty() || from >= root.length() as usize {
+            return Err(Error::not_found("the playlist isn't in the library"));
+        }
+    }
+}
+
+pub async fn details(session: &Session, playlist: &str) -> Result<Details, Error> {
+    let id = playlist_id(playlist).ok_or_else(|| Error::invalid_argument("not a playlist"))?;
+    let list = items(session, id, 0).await?;
+    let (root, _, i) = in_rootlist(session, playlist).await?;
+    let public = root.contents.items[i].attributes.public();
+    let a = &list.attributes;
+    Ok(Details { name: a.name().to_owned(), description: a.description().to_owned(), collaborative: a.collaborative(), public })
+}
+
+pub async fn set_details(session: &Session, playlist: &str, old: &Details, new: &Details) -> Result<(), Error> {
+    let id = playlist_id(playlist).ok_or_else(|| Error::invalid_argument("not a playlist"))?;
+    let user = session.username();
+    let mut values = ListAttributes::new();
+    values.set_name(new.name.trim().to_owned());
+    values.set_collaborative(new.collaborative);
+    let description = new.description.trim();
+    let mut cleared = vec![];
+    if description.is_empty() {
+        cleared.push(ListAttributeKind::LIST_DESCRIPTION);
+    } else {
+        values.set_description(description.to_owned());
+    }
+    let path = format!("/playlist/v2/playlist/{id}/changes");
+    session.spclient().request_with_protobuf(&Method::POST, &path, None, &changes(&user, attributes_op(values, cleared), None)).await?;
+    // Being on one's profile belongs to the library's entry, not to the playlist.
+    if old.public != new.public {
+        let (root, index, _) = in_rootlist(session, playlist).await?;
+        let mut attributes = ItemAttributes::new();
+        attributes.set_public(new.public);
+        let mut state = ItemAttributesPartialState::new();
+        state.values = MessageField::some(attributes);
+        let mut update = UpdateItemAttributes::new();
+        update.set_index(index as i32);
+        update.new_attributes = MessageField::some(state);
+        let mut op = Op::new();
+        op.set_kind(Kind::UPDATE_ITEM_ATTRIBUTES);
+        op.update_item_attributes = MessageField::some(update);
+        let path = format!("/playlist/v2/user/{user}/rootlist/changes");
+        session.spclient().request_with_protobuf(&Method::POST, &path, None, &changes(&user, op, Some(root.revision()))).await?;
+    }
+    Ok(())
+}
+
+/// Takes the playlist out of the library, which is what deleting it is on Spotify.
+pub async fn delete_playlist(session: &Session, playlist: &str) -> Result<(), Error> {
+    let (root, index, _) = in_rootlist(session, playlist).await?;
+    let mut item = Item::new();
+    item.set_uri(playlist.to_owned());
+    let mut rem = Rem::new();
+    rem.set_from_index(index as i32);
+    rem.set_length(1);
+    rem.items.push(item);
+    let mut op = Op::new();
+    op.set_kind(Kind::REM);
+    op.rem = MessageField::some(rem);
+    let user = session.username();
+    let path = format!("/playlist/v2/user/{user}/rootlist/changes");
+    session.spclient().request_with_protobuf(&Method::POST, &path, None, &changes(&user, op, Some(root.revision()))).await?;
+    Ok(())
+}
+
+/// A song of a list, as the app shows it: the `nth` time (from 0) `uri` is in it.
+/// The app leaves out what it can't show, such as episodes, so its rows can't be counted on.
+pub struct Song<'a> {
+    pub uri: &'a str,
+    pub nth: usize,
+}
+
+/// Where each song is in the playlist, and its revision; the playlist is read only as far as needed.
+async fn find(session: &Session, id: &str, songs: &[&Song<'_>]) -> Result<(Vec<usize>, Vec<u8>), Error> {
+    let (mut seen, mut found) = (std::collections::HashMap::<String, usize>::new(), vec![None; songs.len()]);
+    let mut from = 0;
+    loop {
+        let list = items(session, id, from).await?;
+        for (i, item) in list.contents.items.iter().enumerate() {
+            let count = seen.entry(item.uri().to_owned()).or_default();
+            for (song, place) in songs.iter().zip(&mut found) {
+                if song.uri == item.uri() && song.nth == *count {
+                    *place = Some(from + i);
+                }
+            }
+            *count += 1;
+        }
+        from += list.contents.items.len();
+        if let Some(found) = found.iter().copied().collect::<Option<Vec<_>>>() {
+            return Ok((found, list.revision().to_vec()));
+        }
+        if list.contents.items.is_empty() || from >= list.length() as usize {
+            return Err(Error::not_found("the song is no longer in the playlist"));
+        }
+    }
+}
+
+pub async fn remove_song(session: &Session, playlist: &str, song: &Song<'_>) -> Result<(), Error> {
+    let id = playlist_id(playlist).ok_or_else(|| Error::invalid_argument("not a playlist"))?;
+    let (at, revision) = find(session, id, &[song]).await?;
+    let mut item = Item::new();
+    item.set_uri(song.uri.to_owned());
+    let mut rem = Rem::new();
+    rem.set_from_index(at[0] as i32);
+    rem.set_length(1);
+    rem.items.push(item);
+    let mut op = Op::new();
+    op.set_kind(Kind::REM);
+    op.rem = MessageField::some(rem);
+    let path = format!("/playlist/v2/playlist/{id}/changes");
+    session.spclient().request_with_protobuf(&Method::POST, &path, None, &changes(&session.username(), op, Some(&revision))).await?;
+    Ok(())
+}
+
+/// Moves `song` to the place of `other`, which moves one step towards where `song` was.
+pub async fn move_song(session: &Session, playlist: &str, song: &Song<'_>, other: &Song<'_>) -> Result<(), Error> {
+    let id = playlist_id(playlist).ok_or_else(|| Error::invalid_argument("not a playlist"))?;
+    let (at, revision) = find(session, id, &[song, other]).await?;
+    let path = format!("/playlist/v2/playlist/{id}/changes");
+    session.spclient().request_with_protobuf(&Method::POST, &path, None, &changes(&session.username(), moved(at[0], at[1]), Some(&revision))).await?;
+    Ok(())
+}
+
+/// Spotify counts the place to move to before the item is taken out.
+fn moved(from: usize, to: usize) -> Op {
+    let mut mov = Mov::new();
+    mov.set_from_index(from as i32);
+    mov.set_length(1);
+    mov.set_to_index(if to > from { to + 1 } else { to } as i32);
+    let mut op = Op::new();
+    op.set_kind(Kind::MOV);
+    op.mov = MessageField::some(mov);
+    op
 }
 
 fn playlist_id(uri: &str) -> Option<&str> {
@@ -288,7 +458,6 @@ mod tests {
     #[ignore = "needs the network and a saved login; changes the library and puts it back"]
     async fn library_changes_reach_spotify() {
         use librespot_core::{SessionConfig, SpotifyUri, cache::Cache};
-        use librespot_protocol::playlist4_external::{Rem, SelectedListContent};
         let dir = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Rustbeat");
         let login = Cache::new(Some(&dir), None, None, None).unwrap().credentials().expect("not signed in");
         let session = Session::new(SessionConfig::default(), None);
@@ -313,28 +482,21 @@ mod tests {
         let id = SpotifyUri::from_uri(&uri).unwrap();
         let list = SelectedListContent::parse_from_bytes(&session.spclient().get_playlist(&match id { SpotifyUri::Playlist { id, .. } => id, _ => unreachable!() }).await.unwrap()).unwrap();
         println!("LIVE playlist {:?} has {} songs: {:?}", list.attributes.name(), list.length(), list.contents.items.iter().map(|i| i.uri()).collect::<Vec<_>>());
-        // Delete: take it out of the library again.
-        let root = SelectedListContent::parse_from_bytes(&session.spclient().get_rootlist(0, None).await.unwrap()).unwrap();
-        let index = root.contents.items.iter().position(|i| i.uri() == uri).expect("not in the library");
-        println!("LIVE in library at {index}");
-        let mut item = Item::new();
-        item.set_uri(uri.clone());
-        let mut rem = Rem::new();
-        rem.set_from_index(index as i32);
-        rem.set_length(1);
-        rem.items.push(item);
-        let mut op = Op::new();
-        op.set_kind(Kind::REM);
-        op.rem = MessageField::some(rem);
-        let mut delta = Delta::new();
-        delta.ops.push(op);
-        let mut changes = ListChanges::new();
-        changes.set_base_revision(root.revision().to_vec());
-        changes.deltas.push(delta);
-        let user = session.username();
-        session.spclient().request_with_protobuf(&Method::POST, &format!("/playlist/v2/user/{user}/rootlist/changes"), None, &changes).await.unwrap();
-        let root = SelectedListContent::parse_from_bytes(&session.spclient().get_rootlist(0, None).await.unwrap()).unwrap();
-        println!("LIVE still in library: {}", root.contents.items.iter().any(|i| i.uri() == uri));
+        let other = ["spotify:track:0DiWol3AO6WpXZgp0goxAV", "spotify:track:2Foc5Q5nqNiosCNqttzHof"].into_iter().find(|t| *t != track).unwrap();
+        add_to_playlist(&session, &uri, other).await.unwrap();
+        let songs = async || items(&session, playlist_id(&uri).unwrap(), 0).await.unwrap().contents.items.iter().map(|i| i.uri().to_owned()).collect::<Vec<_>>();
+        move_song(&session, &uri, &Song { uri: other, nth: 0 }, &Song { uri: track, nth: 0 }).await.unwrap();
+        assert_eq!(songs().await, [other, track], "moved up");
+        move_song(&session, &uri, &Song { uri: other, nth: 0 }, &Song { uri: track, nth: 0 }).await.unwrap();
+        assert_eq!(songs().await, [track, other], "moved down");
+        remove_song(&session, &uri, &Song { uri: track, nth: 0 }).await.unwrap();
+        assert_eq!(songs().await, [other], "removed");
+        let old = details(&session, &uri).await.unwrap();
+        let new = Details { name: "Rustbeat test 2".into(), description: "About it".into(), collaborative: true, public: !old.public };
+        set_details(&session, &uri, &old, &new).await.unwrap();
+        assert_eq!(details(&session, &uri).await.unwrap(), new);
+        delete_playlist(&session, &uri).await.unwrap();
+        assert!(in_rootlist(&session, &uri).await.is_err(), "still in the library");
     }
 
     #[test]
@@ -343,6 +505,9 @@ mod tests {
         for bad in ["spotify:album:1", "spotify:playlist:", "spotify:playlist:a/../b"] {
             assert_eq!(playlist_id(bad), None, "{bad}");
         }
+        let mov = moved(1, 3).mov.unwrap();
+        assert_eq!((mov.from_index(), mov.to_index()), (1, 4), "down: counted before it is taken out");
+        assert_eq!(moved(3, 1).mov.to_index(), 1, "up");
         let changes = added("me", &["spotify:track:1"], false);
         let add = &changes.deltas[0].ops[0].add;
         assert!(add.add_last() && add.items[0].uri() == "spotify:track:1");

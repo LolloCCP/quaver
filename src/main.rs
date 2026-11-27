@@ -86,6 +86,10 @@ struct Ui {
     /// Liked songs, and the playlists songs can be added to.
     liked: HashSet<String>,
     editable: HashSet<String>,
+    /// One's own playlists, which can be renamed and deleted.
+    owned: HashSet<String>,
+    /// The playlist in the edit dialog, as it was read.
+    editing: Option<(String, library::Details)>,
     tiles: Rc<VecModel<Card>>,
     shelves: Vec<Rc<VecModel<Card>>>,
     /// Start of each lyrics line. Belongs to `lyrics_uri`.
@@ -234,6 +238,20 @@ impl Ui {
             }
         }
         self.app.set_track_liked(self.liked.contains(&self.track_uri));
+    }
+
+    /// What the open list lets one change.
+    fn mark_list(&self) {
+        let context = self.app.get_list_context();
+        self.app.set_list_editable(self.editable.contains(context.as_str()));
+        self.app.set_list_own(self.owned.contains(context.as_str()));
+    }
+
+    /// The row's song, counted the way `library::Song` wants it.
+    fn song(&self, row: usize) -> Option<(String, usize)> {
+        let uri = self.rows.row_data(row)?.uri;
+        let nth = (0..row).filter(|&i| self.rows.row_data(i).is_some_and(|r| r.uri == uri)).count();
+        Some((uri.into(), nth))
     }
 
     /// The playlist chooser for a song, or for a new empty playlist.
@@ -827,7 +845,25 @@ impl Ui {
                 app.set_blocked(true);
             }
             Event::Playlists(list) => self.playlists.set_vec(list.into_iter().map(|c| card(c, SMALL)).collect::<Vec<_>>()),
-            Event::Editable(uris) => self.editable = uris.into_iter().collect(),
+            Event::Editable(uris) => {
+                self.editable = uris.into_iter().collect();
+                self.mark_list();
+            }
+            Event::Owned(uris) => {
+                self.owned = uris.into_iter().collect();
+                self.mark_list();
+            }
+            Event::PlaylistDetails { uri, details } => {
+                // Unless another list was opened meanwhile.
+                if uri.as_str() == app.get_list_context().as_str() {
+                    app.set_edit_name(details.name.as_str().into());
+                    app.set_edit_description(details.description.as_str().into());
+                    app.set_edit_collaborative(details.collaborative);
+                    app.set_edit_public(details.public);
+                    app.set_edit_open(true);
+                    self.editing = Some((uri, details));
+                }
+            }
             Event::Liked(uris) => {
                 self.liked = uris.into_iter().collect();
                 self.show_likes();
@@ -878,6 +914,7 @@ impl Ui {
                 }
                 app.set_list_title(title.into());
                 app.set_list_context(context.into());
+                self.mark_list();
                 app.set_status("".into());
                 app.set_loading(true);
                 app.set_has_more(true);
@@ -1372,6 +1409,34 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }));
     send!(app.on_add_to_playlist(playlist, name, track) Cmd::AddToPlaylist { playlist: playlist.into(), name: name.into(), track: track.into() });
+    app.on_edit_playlist(|| with_ui(|ui| drop(ui.tx.send(Cmd::PlaylistDetails(ui.app.get_list_context().into())))));
+    app.on_save_playlist(|name, description, collaborative, public| with_ui(|ui| {
+        let Some((playlist, old)) = ui.editing.take() else { return };
+        if name.trim().is_empty() {
+            return;
+        }
+        if playlist.as_str() == ui.app.get_list_context().as_str() {
+            ui.app.set_list_title(name.trim().into());
+        }
+        let new = library::Details { name: name.into(), description: description.into(), collaborative, public };
+        let _ = ui.tx.send(Cmd::SetPlaylistDetails { playlist, old, new });
+    }));
+    app.on_delete_playlist(|| with_ui(|ui| {
+        let (playlist, name) = (ui.app.get_list_context().into(), ui.app.get_list_title().into());
+        let _ = ui.tx.send(Cmd::DeletePlaylist { playlist, name });
+    }));
+    app.on_remove_song(|row| with_ui(|ui| {
+        let Some((uri, nth)) = usize::try_from(row).ok().and_then(|row| ui.song(row)) else { return };
+        let _ = ui.tx.send(Cmd::RemoveSong { playlist: ui.app.get_list_context().into(), uri, nth });
+        ui.rows.remove(row as usize);
+    }));
+    app.on_move_song(|row, to| with_ui(|ui| {
+        let (Ok(row), Ok(to)) = (usize::try_from(row), usize::try_from(to)) else { return };
+        let (Some((uri, nth)), Some((other, other_nth))) = (ui.song(row), ui.song(to)) else { return };
+        let _ = ui.tx.send(Cmd::MoveSong { playlist: ui.app.get_list_context().into(), uri, nth, other, other_nth });
+        let moving = ui.rows.remove(row);
+        ui.rows.insert(to, moving);
+    }));
     let go = {
         let (history, app) = (history.clone(), app.as_weak());
         move |step: fn(&mut History) -> Option<Page>| {
@@ -1814,6 +1879,8 @@ fn main() -> Result<(), slint::PlatformError> {
         playlists,
         liked: HashSet::new(),
         editable: HashSet::new(),
+        owned: HashSet::new(),
+        editing: None,
         tiles,
         shelves: vec![],
         lyrics: vec![],

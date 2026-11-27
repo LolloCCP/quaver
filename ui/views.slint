@@ -12,6 +12,13 @@ export component Row inherits Rectangle {
     in property <bool> lit;
     // Liking and playlists need Spotify; offline files have neither.
     in property <bool> can-save: true;
+    // In a playlist one may change: the song can be moved and taken out.
+    in property <bool> editable;
+    in property <bool> first;
+    in property <bool> last;
+    callback remove();
+    callback move-up();
+    callback move-down();
     callback play();
     callback enqueue();
     callback like(bool);
@@ -100,6 +107,18 @@ export component Row inherits Rectangle {
             if root.can-save: VerticalLayout {
                 alignment: center;
                 Icon { opacity: root.lit ? 1 : 0; glyph: "\u{ecc8}"; label: "Add to playlist: " + item.title; size: 13px; clicked => { root.add-to(); } }
+            }
+            if root.editable: VerticalLayout {
+                alignment: center;
+                Icon { opacity: root.lit && !root.first ? 1 : 0; enabled: !root.first; glyph: "\u{e70e}"; label: "Move up: " + item.title; size: 13px; clicked => { root.move-up(); } }
+            }
+            if root.editable: VerticalLayout {
+                alignment: center;
+                Icon { opacity: root.lit && !root.last ? 1 : 0; enabled: !root.last; glyph: "\u{e70d}"; label: "Move down: " + item.title; size: 13px; clicked => { root.move-down(); } }
+            }
+            if root.editable: VerticalLayout {
+                alignment: center;
+                Icon { opacity: root.lit ? 1 : 0; glyph: "\u{e74d}"; label: "Remove from this playlist: " + item.title; size: 13px; clicked => { root.remove(); } }
             }
             VerticalLayout {
                 alignment: center;
@@ -472,8 +491,12 @@ export component NowPlaying inherits Rectangle {
         pointer-event(e) => {
             // The empty page moves the window, like the title bar it replaces.
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                if (animation-tick() - root.last-press < 400ms) { root.window-maximize(); } else { root.window-drag(); }
+                if (animation-tick() - root.last-press < 400ms) { root.window-maximize(); }
                 root.last-press = animation-tick();
+            }
+            // The drag starts on movement only; see the top strip in app.slint.
+            if (e.kind == PointerEventKind.move && self.pressed && (abs(self.mouse-x - self.pressed-x) > 3px || abs(self.mouse-y - self.pressed-y) > 3px)) {
+                root.window-drag();
             }
             if (e.kind != PointerEventKind.move || self.mouse-x != root.last-x || self.mouse-y != root.last-y) {
                 root.last-x = self.mouse-x;
