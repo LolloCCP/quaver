@@ -148,6 +148,57 @@ component Lyrics inherits Rectangle {
     }
     property <int> look;
     Timer { interval: 1s; running: root.synced && !root.by-hand && Theme.motion; triggered => { root.look += 1; } }
+
+    // Everything moves on the frame clock, as in karaoke: Slint doesn't animate values here that
+    // change from code. `pos` is where the lyrics are, in lines; it glides from one line to the next.
+    property <float> from;
+    property <float> to;
+    property <duration> started;
+    property <bool> gliding;
+    init => { root.from = root.active; root.to = root.active; }
+    changed active => {
+        root.from = root.pos;
+        root.to = root.active;
+        root.started = animation-tick();
+        root.gliding = Theme.motion;
+    }
+    property <float> k: root.gliding ? min(1, (animation-tick() - root.started) / (Theme.quick * 2)) : 1;
+    // Eases in and out, so a line neither starts nor stops with a jolt.
+    property <float> pos: root.from + (root.to - root.from) * (root.k < 0.5 ? 4 * root.k * root.k * root.k : 1 - pow(2 - 2 * root.k, 3) / 2);
+
+    // The scroll to the sung line moves off at once and settles softly.
+    property <length> scroll-from;
+    property <length> scroll-to;
+    property <duration> scroll-started;
+    property <bool> scrolling;
+    property <float> sk: root.scrolling ? min(1, (animation-tick() - root.scroll-started) / (Theme.quick * 4)) : 1;
+    property <length> scroll-y: root.scroll-from + (root.scroll-to - root.scroll-from) * (1 - pow(1 - root.sk, 3));
+    changed scroll-y => { if (root.scrolling && !root.by-hand) { flick.content-y = root.scroll-y; } }
+    // A new line starts a new glide; a line that only moves (as sizes change) keeps the glide going.
+    function scroll(y: length, again: bool) {
+        if (!Theme.motion) {
+            root.scrolling = false;
+            flick.content-y = y;
+        } else if (again || !root.scrolling) {
+            root.scroll-from = flick.content-y;
+            root.scroll-to = y;
+            root.scroll-started = animation-tick();
+            root.scrolling = true;
+        } else {
+            root.scroll-to = y;
+        }
+    }
+    Timer {
+        interval: 100ms;
+        running: root.gliding || root.scrolling;
+        triggered => {
+            if (root.gliding && animation-tick() - root.started >= Theme.quick * 2) { root.gliding = false; }
+            if (root.scrolling && animation-tick() - root.scroll-started >= Theme.quick * 4) {
+                root.scrolling = false;
+                if (!root.by-hand) { flick.content-y = root.scroll-to; }
+            }
+        }
+    }
     clip: true;
     if root.lines.length == 0: Text { text: root.note; color: Theme.dim; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
     flick := Flickable {
@@ -156,10 +207,9 @@ component Lyrics inherits Rectangle {
         content-height: column.preferred-height;
         flicked => {
             root.by-hand = true;
+            root.scrolling = false;
             root.flicks += 1;
         }
-        // Moves off at once and settles softly, so a line that comes mid-glide carries on without a stop.
-        animate content-y { duration: root.by-hand ? 0ms : Theme.quick * 4; easing: cubic-bezier(0.22, 0.75, 0.25, 1); }
         column := VerticalLayout {
             width: root.width;
             padding-top: root.synced ? root.height * 0.4 : 8px;
@@ -172,36 +222,39 @@ component Lyrics inherits Rectangle {
                 animate indent { duration: Theme.quick; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                 property <length> target: root.height * 0.4 - self.y;
                 property <int> look: root.look;
-                changed follow => { self.center(); }
+                changed follow => { self.center(true); }
                 // A press on the lyrics stops them on their way; this brings the line home.
-                changed look => { if (abs((flick.content-y - self.target) / 1px) > 1) { self.center(); } }
-                function center() { if (self.active && self.follow) { flick.content-y = self.target; } }
-                // Also covers lyrics that arrive in the middle of a line, or a resize.
-                init => { self.center(); }
-                changed active => { self.center(); }
-                changed y => { self.center(); }
+                changed look => { if (!root.scrolling && abs((flick.content-y - self.target) / 1px) > 1) { self.center(true); } }
+                function center(again: bool) { if (self.active && self.follow) { root.scroll(self.target, again); } }
+                // Lyrics that arrive in the middle of a line, or a resize, go there at once.
+                init => { if (self.active && self.follow) { flick.content-y = self.target; } }
+                changed active => { self.center(true); }
+                changed y => { self.center(false); }
                 height: words.preferred-height;
                 mouse-cursor: root.synced ? MouseCursor.pointer : MouseCursor.default;
                 clicked => { if (root.synced) { root.seek(i); } }
-                // Timed lyrics: the line being sung is bigger, and the others fade the further away they are.
-                property <int> away: i - root.active;
+                // How far from where the lyrics are, in lines: 0 for the sung line, gliding in between.
+                property <float> d: i - root.pos;
+                property <float> far: abs(self.d);
+                property <float> near: min(1, self.far);
                 // Lines fade out over the last 70px at the top and bottom, and a line that doesn't fit is hidden.
                 property <length> shown-y: self.y + flick.content-y;
                 property <float> edge: max(0, min(1, min(self.shown-y, root.height - self.shown-y - self.height) / 70px));
-                // Past the chosen number of lines around the sung one, timed lyrics fade out.
-                property <bool> kept: !root.synced || Theme.lyric-lines == 0 || abs(self.away) * 2 < Theme.lyric-lines;
-                opacity: (self.kept ? 1 : 0) * self.edge * (!root.synced || self.active || self.has-hover ? 1 : max(0.22, 0.62 - (abs(self.away) - 1) * 0.13) * (self.away < 0 ? 0.8 : 1));
-                animate opacity { duration: Theme.quick * 2; easing: ease-in-out; }
+                // With a chosen number of lines around the sung one, the outer two fade out step by step
+                // (to 0.8 and 0.4 of their light), and the ones past them are hidden.
+                property <float> kept: !root.synced || Theme.lyric-lines == 0 ? 1 : max(1 - self.far, min(1, (Theme.lyric-lines / 2 + 0.5 - self.far) / 2.5));
+                // The others dim the further away they are, sung ones a little more.
+                property <float> dim: self.far < 1 ? 1 - 0.38 * self.far : max(0.22, 0.62 - (self.far - 1) * 0.13);
+                property <float> side: self.d < 0 ? 1 - 0.2 * min(1, -self.d) : 1;
+                opacity: !root.synced || self.has-hover ? self.edge : max(0, self.kept) * self.edge * self.dim * self.side;
                 words := Text {
                     x: line-area.indent;
                     // Timed lines wrap as they would at the sung size, so growing never moves the line breaks.
                     width: root.synced ? (root.width - 24px) * self.font-size / 32px : root.width - 24px;
                     text: line == "" ? "♪" : line;
                     wrap: word-wrap;
-                    property <length> size: !root.synced ? 18px : line-area.active ? 32px : 22px;
-                    animate size { duration: Theme.quick * 2; easing: ease-in-out; }
                     // Whole pixels: the renderer caches letters for every size it is asked for.
-                    font-size: round(self.size / 1px) * 1px;
+                    font-size: !root.synced ? 18px : round((32 - 10 * line-area.near)) * 1px;
                     font-weight: root.synced ? 700 : 400;
                     color: line-area.has-hover && root.synced && !line-area.active ? Theme.accent : Theme.text;
                     animate color { duration: Theme.quick * 1.5; }
@@ -229,7 +282,8 @@ component SungLine inherits TouchArea {
     property <length> slot: root.big-slot + (root.small-slot - root.big-slot) * root.near;
     property <length> offset: root.d * root.small-slot + (root.d < 0 ? -1 : 1) * root.near * (root.big-slot - root.small-slot) / 2;
     // A long line shrinks to stay on one row, the same at every size.
-    property <float> fit: max(0.45, min(1, root.width / max(1px, measure.preferred-width)));
+    // Letters don't grow exactly in step with the size, so it leaves a little room.
+    property <float> fit: max(0.45, min(1, root.width * 0.97 / max(1px, measure.preferred-width)));
     visible: abs(root.d) < 6;
     y: root.middle + root.offset - root.slot / 2;
     height: root.slot;
@@ -248,8 +302,9 @@ component SungLine inherits TouchArea {
         width: root.width;
         height: root.height;
         text: root.words;
-        // Whole pixels: the renderer caches letters for every size it is asked for.
-        font-size: round((root.big + (root.small - root.big) * root.near) * root.fit / 1px) * 1px;
+        // Whole pixels: the renderer caches letters for every size it is asked for. Rounded down,
+        // since rounding up would make a line that fills the row a little too wide for it.
+        font-size: floor((root.big + (root.small - root.big) * root.near) * root.fit / 1px) * 1px;
         font-weight: 800;
         color: Theme.text;
         vertical-alignment: center;
@@ -812,7 +867,7 @@ export component SettingsView inherits ScrollView {
                 Pill { quiet: true; text: "Built-in"; selected: !root.soloist; clicked => { if (root.soloist) { root.set-soloist(false); } } }
                 Pill { quiet: true; text: "Spotify Soloist"; selected: root.soloist; clicked => { root.set-soloist(true); } }
             }
-            Text { text: root.soloist ? "Spotify's own player makes the sound, lossless where Spotify has it. The equalizer and streaming quality below don't reach it." : "If songs are refused, Spotify doesn't allow the built-in player on your account. Soloist is Spotify's own player and works there."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
+            Text { text: root.soloist ? "Spotify's own player makes the sound, lossless where Spotify has it. Streaming quality below doesn't reach it, and the equalizer applies from the next start." : "If songs are refused, Spotify doesn't allow the built-in player on your account. Soloist is Spotify's own player and works there."; color: Theme.dim; font-size: 12px; wrap: word-wrap; }
             // Only what comes next, and nothing once it works.
             Text {
                 text: root.soloist-step == 1 ? "Set up Soloist, step 1 of 3: download it from Spotify. By doing so you accept Spotify's terms."
@@ -870,7 +925,7 @@ export component SettingsView inherits ScrollView {
                 for rate in [96, 160, 320]: Pill { quiet: true; text: rate + " kbps"; selected: root.bitrate == rate; clicked => { root.set-bitrate(rate); } }
             }
             Switch { text: "Same volume for every song"; checked: root.normalise; toggled(on) => { root.set-normalise(on); } }
-            if root.needs-restart: Text { text: "Quality and volume changes apply the next time Rustbeat starts."; color: Theme.accent; font-size: 12px; }
+            if root.needs-restart: Text { text: "Quality, volume and Soloist's equalizer changes apply the next time Rustbeat starts."; color: Theme.accent; font-size: 12px; }
         }
         Section {
             text: "Window";

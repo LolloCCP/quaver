@@ -409,7 +409,9 @@ impl Ui {
             let old = settings.clone();
             change(&mut settings);
             retint = old.tint != settings.tint;
-            if (old.bitrate, old.normalise) != (settings.bitrate, settings.normalise) {
+            // Soloist reads its equalizer only when it starts.
+            let soloist_eq = settings.soloist && soloist::Tuning::of(&old).eq != soloist::Tuning::of(&settings).eq;
+            if (old.bitrate, old.normalise) != (settings.bitrate, settings.normalise) || soloist_eq {
                 self.app.set_needs_restart(true);
             }
             settings.clone()

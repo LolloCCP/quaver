@@ -24,6 +24,7 @@ use crate::{
     announce::{self, Announcer},
     backend::{Cmd, Emit, End, Event, Jam, Library, SEARCH},
     connect::Connect,
+    settings::{BANDS, Settings},
 };
 
 const QUEUE_SHOWN: usize = 80;
@@ -168,12 +169,49 @@ fn port_of(netstat: &str, pid: u32) -> Option<u16> {
 /// does that, but these are lines of its own settings, which it reads when it starts.
 // shortcut: an account has no such file before its first sign-in, so that first time plays
 // untuned; start Soloist again after pairing if that matters.
-fn tune(state: &Path, normalise: bool) -> std::io::Result<()> {
+/// What Rustbeat sets in Soloist's own settings, which it reads when it starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tuning {
+    pub normalise: bool,
+    /// Rustbeat's bands; all at 0 when the equalizer is off.
+    pub eq: [f32; BANDS],
+}
+
+impl Tuning {
+    pub fn of(settings: &Settings) -> Self {
+        Self { normalise: settings.normalise, eq: if settings.eq_on { settings.eq } else { [0.; BANDS] } }
+    }
+}
+
+/// The bands of Spotify's own equalizer, and the names of their settings.
+const SPOTIFY_BANDS: [(f32, &str); 6] = [
+    (60., "low_shelf"),
+    (150., "low_peak"),
+    (400., "low_mid_peak"),
+    (1000., "high_mid_peak"),
+    (2400., "high_peak"),
+    (15000., "high_shelf"),
+];
+
+/// Rustbeat's gain at `hz`, read between its bands, which are an octave apart from 31.25 Hz.
+fn gain_at(eq: &[f32; BANDS], hz: f32) -> f32 {
+    let place = (hz / 31.25).log2().clamp(0., (BANDS - 1) as f32);
+    let (low, part) = (place.floor() as usize, place.fract());
+    let high = (low + 1).min(BANDS - 1);
+    eq[low] + (eq[high] - eq[low]) * part
+}
+
+/// Spotify keeps a gain as a share of its ±12 dB range, in units of 2^-30.
+fn spotify_gain(db: f32) -> i64 {
+    (f64::from(db.clamp(-12., 12.)) / 12. * f64::from(1u32 << 30)).round() as i64
+}
+
+fn tune(state: &Path, tuning: Tuning) -> std::io::Result<()> {
     let Ok(users) = std::fs::read_dir(state.join("settings").join("Users")) else { return Ok(()) };
     for user in users.flatten() {
         let path = user.path().join("prefs");
         let Ok(old) = std::fs::read_to_string(&path) else { continue };
-        let tuned = tuned(&old, normalise);
+        let tuned = tuned(&old, tuning);
         if tuned != old {
             let new = path.with_extension("new");
             std::fs::write(&new, tuned)?;
@@ -183,24 +221,26 @@ fn tune(state: &Path, normalise: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-fn tuned(prefs: &str, normalise: bool) -> String {
+fn tuned(prefs: &str, tuning: Tuning) -> String {
     const LOSSLESS: &str = "5";
-    let wanted = [
-        ("audio.play_bitrate_enumeration", LOSSLESS),
-        ("audio.play_bitrate_non_metered_enumeration", LOSSLESS),
-        ("audio.play_bitrate_non_metered_migrated", "true"),
-        ("audio.normalize_v2", if normalise { "true" } else { "false" }),
+    let mut wanted = vec![
+        ("audio.play_bitrate_enumeration".to_owned(), LOSSLESS.to_owned()),
+        ("audio.play_bitrate_non_metered_enumeration".into(), LOSSLESS.into()),
+        ("audio.play_bitrate_non_metered_migrated".into(), "true".into()),
+        ("audio.normalize_v2".into(), tuning.normalise.to_string()),
+        ("audio.equalizer_v2".into(), tuning.eq.iter().any(|g| *g != 0.).to_string()),
     ];
+    wanted.extend(SPOTIFY_BANDS.map(|(hz, name)| (format!("audio.equalizer.{name}_gain_v2"), spotify_gain(gain_at(&tuning.eq, hz)).to_string())));
     let key = |line: &str| line.split('=').next().unwrap_or_default().to_owned();
-    let kept = prefs.lines().filter(|l| !l.is_empty() && !wanted.iter().any(|w| w.0 == key(l))).map(String::from);
-    kept.chain(wanted.map(|(key, value)| format!("{key}={value}"))).map(|l| l + "\n").collect()
+    let kept: Vec<String> = prefs.lines().filter(|l| !l.is_empty() && !wanted.iter().any(|w| w.0 == key(l))).map(String::from).collect();
+    kept.into_iter().chain(wanted.into_iter().map(|(key, value)| format!("{key}={value}"))).map(|l| l + "\n").collect()
 }
 
-async fn launch(setup: &Setup, data_dir: &Path, normalise: bool) -> Result<(Child, Socket), Error> {
+async fn launch(setup: &Setup, data_dir: &Path, tuning: Tuning) -> Result<(Child, Socket), Error> {
     let state = data_dir.join("soloist-state");
     std::fs::create_dir_all(&state)?;
     // Worse sound is better than none.
-    if let Err(e) = tune(&state, normalise) {
+    if let Err(e) = tune(&state, tuning) {
         log::warn!("soloist settings: {e}");
     }
     let port_file = state.join("ws.port");
@@ -243,11 +283,11 @@ pub async fn run(
     cache: &Cache,
     setup: &Setup,
     data_dir: &Path,
-    normalise: bool,
+    tuning: Tuning,
 ) -> Result<End, Error> {
     let mut playing_on = tokio::task::spawn_blocking(output).await.ok().flatten();
     let (mut child, socket) = {
-        let starting = launch(setup, data_dir, normalise);
+        let starting = launch(setup, data_dir, tuning);
         tokio::pin!(starting);
         loop {
             tokio::select! {
@@ -288,7 +328,7 @@ pub async fn run(
                 if let Err(e) = child.kill().await {
                     log::warn!("soloist: {e}");
                 }
-                let (new_child, socket) = launch(setup, data_dir, normalise).await?;
+                let (new_child, socket) = launch(setup, data_dir, tuning).await?;
                 (child, player.socket) = (new_child, socket);
                 player.paired = None;
             }
@@ -889,26 +929,41 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rustbeat-launch-{}", std::process::id()));
         // Any program that doesn't know these options ends with an error.
         let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32").join("where.exe");
-        let failed = launch(&Setup { exe, key: "k".into() }, &dir, false).await.err().expect("must fail");
+        let failed = launch(&Setup { exe, key: "k".into() }, &dir, Tuning::default()).await.err().expect("must fail");
         assert!(failed.to_string().contains("API key"), "{failed}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
+    fn the_equalizer_is_told_the_way_spotify_keeps_it() {
+        // Values the Spotify app wrote for +8.5, +7 and +2.5 dB.
+        assert_eq!([8.5, 7., 2.5].map(spotify_gain), [760567125, 626349397, 223696213]);
+        assert_eq!(spotify_gain(-99.), -(1 << 30));
+        let bass = [6., 5., 4., 2., 0., 0., 0., 0., 0., 0.];
+        assert_eq!(gain_at(&bass, 62.5), 5.);
+        assert!((gain_at(&bass, 60.) - 5.06).abs() < 0.01, "between the bands");
+        assert_eq!(gain_at(&bass, 15000.), 0.);
+        assert_eq!(gain_at(&[1.; BANDS], 20.), 1., "below the lowest band");
+        let prefs = tuned("", Tuning { normalise: false, eq: bass });
+        assert!(prefs.contains("audio.equalizer_v2=true\n") && prefs.contains("audio.equalizer.low_shelf_gain_v2="), "{prefs}");
+    }
+
+    #[test]
     fn its_settings_are_tuned_and_the_rest_kept() {
         let dir = std::env::temp_dir().join(format!("rustbeat-tune-{}", std::process::id()));
-        tune(&dir, false).unwrap();
+        tune(&dir, Tuning::default()).unwrap();
         let user = dir.join("settings").join("Users").join("someone-user");
         std::fs::create_dir_all(user.with_file_name("new-user")).unwrap();
         std::fs::create_dir_all(&user).unwrap();
         let prefs = user.join("prefs");
         std::fs::write(&prefs, "audio.gapless_migrated_to_ps=true\r\naudio.play_bitrate_enumeration=2\r\n").unwrap();
         for normalise in [true, false] {
-            tune(&dir, normalise).unwrap();
+            let tuning = Tuning { normalise, eq: [0.; BANDS] };
+            tune(&dir, tuning).unwrap();
             let now = std::fs::read_to_string(&prefs).unwrap();
             assert!(now.starts_with("audio.gapless_migrated_to_ps=true\naudio.play_bitrate_enumeration=5\n"), "{now}");
-            assert!(now.ends_with(&format!("audio.normalize_v2={normalise}\n")), "{now}");
-            assert_eq!(tuned(&now, normalise), now);
+            assert!(now.contains(&format!("audio.normalize_v2={normalise}\naudio.equalizer_v2=false\n")), "{now}");
+            assert_eq!(tuned(&now, tuning), now);
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }

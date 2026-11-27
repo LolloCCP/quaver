@@ -399,8 +399,8 @@ async fn connected(
                     () = quit_requested(rx) => return Ok(End::Quit),
                 }
                 *retry = Duration::from_secs(5);
-                let normalise = shared.lock().normalise;
-                let end = soloist::run(&mut library, rx, emit, cache, &setup, data_dir, normalise).await;
+                let tuning = soloist::Tuning::of(&shared.lock());
+                let end = soloist::run(&mut library, rx, emit, cache, &setup, data_dir, tuning).await;
                 emit(Event::Stopped);
                 session.shutdown();
                 return match end {
