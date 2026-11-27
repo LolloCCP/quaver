@@ -757,6 +757,7 @@ export component SettingsView inherits ScrollView {
     in property <bool> tray;
     in property <bool> updates;
     in property <bool> gpu;
+    in property <bool> links;
     in property <bool> needs-restart;
     in property <bool> soloist;
     in property <bool> soloist-here;
@@ -802,6 +803,7 @@ export component SettingsView inherits ScrollView {
     callback set-tint(float);
     callback set-motion(bool);
     callback set-gpu(bool);
+    callback set-links(bool);
     callback set-lyric-lines(int);
     callback logout();
     property <[string]> labels: ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
@@ -853,6 +855,7 @@ export component SettingsView inherits ScrollView {
             }
             Switch { text: "Motion effects"; note: "Animations, pointer light and gliding scrolling"; checked: Theme.motion; toggled(on) => { root.set-motion(on); } }
             Switch { text: "Hardware acceleration"; note: "Smoother movement, drawn by the graphics card. Applies after a restart"; checked: root.gpu; toggled(on) => { root.set-gpu(on); } }
+            Switch { text: "Open Spotify links here"; note: "Song, album, playlist and artist links open in Rustbeat instead of the Spotify app"; checked: root.links; toggled(on) => { root.set-links(on); } }
             HorizontalLayout {
                 spacing: 8px;
                 Text { text: "Lyrics lines"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }

@@ -8,6 +8,7 @@ mod eq;
 mod history;
 mod instance;
 mod library;
+mod links;
 mod local;
 mod people;
 mod resample;
@@ -90,6 +91,8 @@ struct Ui {
     owned: HashSet<String>,
     /// The playlist in the edit dialog, as it was read.
     editing: Option<(String, library::Details)>,
+    /// A link that came before Spotify was ready.
+    link: Option<String>,
     tiles: Rc<VecModel<Card>>,
     shelves: Vec<Rc<VecModel<Card>>>,
     /// Start of each lyrics line. Belongs to `lyrics_uri`.
@@ -182,6 +185,13 @@ fn hwnd(app: &App) -> Option<*mut c_void> {
     }
 }
 
+/// The link a starting Rustbeat left, once: only what Rustbeat wrote itself is read back.
+fn take_link(file: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(file).ok()?;
+    let _ = std::fs::remove_file(file);
+    links::uri_of(&text)
+}
+
 /// Opens a page or folder the way a double-click would.
 fn open(target: &std::ffi::OsStr) {
     if let Err(e) = std::process::Command::new("explorer").arg(target).spawn() {
@@ -238,6 +248,32 @@ impl Ui {
             }
         }
         self.app.set_track_liked(self.liked.contains(&self.track_uri));
+    }
+
+    /// Plays a linked song, or opens the linked album, playlist, artist or person.
+    fn open_link(&mut self, uri: String) {
+        if !self.app.get_ready() {
+            self.link = Some(uri);
+            return;
+        }
+        if self.shared.lock().offline {
+            return self.toast("Spotify links need Spotify; Rustbeat is playing your own files.");
+        }
+        self.app.set_now_playing(false);
+        let kind = uri.split(':').nth(1).unwrap_or_default();
+        match kind {
+            "track" => {
+                self.app.set_toast(STARTING.into());
+                self.app.invoke_show_toast();
+                let _ = self.tx.send(Cmd::Play { context: uri.clone(), track: uri });
+            }
+            "artist" | "user" => self.app.invoke_people(uri.into()),
+            _ => {
+                let title = if kind == "album" { "Album" } else { "Playlist" };
+                self.app.invoke_show_list(uri.as_str().into(), "".into());
+                self.app.invoke_open(title.into(), uri.into());
+            }
+        }
     }
 
     /// What the open list lets one change.
@@ -484,6 +520,7 @@ impl Ui {
         app.set_tray(s.tray);
         app.set_updates(s.updates);
         app.set_gpu(s.gpu);
+        app.set_links(s.links);
         app.set_stage_style(s.stage.into());
         app.global::<Theme>().set_motion(s.motion);
         app.global::<Theme>().set_lyric_lines(s.lyric_lines.into());
@@ -828,7 +865,12 @@ impl Ui {
                 app.set_busy(false);
                 app.set_message(message.into());
             }
-            Event::Ready => app.set_ready(true),
+            Event::Ready => {
+                app.set_ready(true);
+                if let Some(uri) = self.link.take() {
+                    self.open_link(uri);
+                }
+            }
             Event::Status(text) => {
                 app.set_status(text.as_str().into());
                 // An empty list shows it in its place.
@@ -1297,11 +1339,19 @@ fn media_controls(app: &App, tx: UnboundedSender<Cmd>) -> Option<MediaControls> 
 fn main() -> Result<(), slint::PlatformError> {
     env_logger::init();
     updater::wait();
-    let Some(instance) = instance::claim(r"Local\Rustbeat") else { return Ok(()) };
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return Err("LOCALAPPDATA is not set".into());
     };
     let data_dir = PathBuf::from(local).join("Rustbeat");
+    // A link Windows started Rustbeat with waits in a file, for whichever Rustbeat runs.
+    let link_file = data_dir.join("open-link.txt");
+    if let Some(uri) = std::env::args().nth(1).as_deref().and_then(links::uri_of) {
+        let _ = std::fs::create_dir_all(&data_dir);
+        if let Err(e) = std::fs::write(&link_file, uri) {
+            log::warn!("link: {e}");
+        }
+    }
+    let Some(instance) = instance::claim(r"Local\Rustbeat") else { return Ok(()) };
 
     let settings_path = data_dir.join("settings.txt");
     let settings = Settings::load(&settings_path);
@@ -1798,6 +1848,12 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_set_motion(|on| with_ui(|ui| ui.change_settings(|s| s.motion = on)));
     app.on_set_lyric_lines(|n| with_ui(|ui| ui.change_settings(|s| s.lyric_lines = u8::try_from(n).ok().filter(|n| settings::LYRIC_LINES.contains(n)).unwrap_or(0))));
     app.on_set_gpu(|on| with_ui(|ui| ui.change_settings(|s| s.gpu = on)));
+    app.on_set_links(|on| with_ui(|ui| {
+        match std::env::current_exe().and_then(|exe| links::handle(&exe, on)) {
+            Ok(()) => ui.change_settings(|s| s.links = on),
+            Err(e) => ui.toast(&format!("Spotify links could not be changed: {e}")),
+        }
+    }));
     app.on_set_tray(|on| with_ui(|ui| ui.change_settings(|s| s.tray = on)));
     app.on_set_updates({
         let data_dir = data_dir.clone();
@@ -1839,10 +1895,18 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    // The Spotify app takes the links back each time it starts.
+    if settings.links && let Err(e) = std::env::current_exe().and_then(|exe| links::handle(&exe, true)) {
+        log::warn!("links: {e}");
+    }
     instance.on_another({
-        let app = app.as_weak();
+        let (app, link_file) = (app.as_weak(), link_file.clone());
         move || {
-            let _ = app.upgrade_in_event_loop(|app| {
+            let link = take_link(&link_file);
+            let _ = app.upgrade_in_event_loop(move |app| {
+                if let Some(uri) = link {
+                    with_ui(|ui| ui.open_link(uri));
+                }
                 if let Err(e) = app.show() {
                     log::error!("show window: {e}");
                 }
@@ -1883,6 +1947,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editable: HashSet::new(),
         owned: HashSet::new(),
         editing: None,
+        link: None,
         tiles,
         shelves: vec![],
         lyrics: vec![],
@@ -1907,6 +1972,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.show_palette(look.palette);
     ui.set_look(look, true);
     UI.set(Some(ui));
+    if let Some(uri) = take_link(&link_file) {
+        with_ui(|ui| ui.open_link(uri));
+    }
 
     // Off, nothing is sent to GitHub.
     if settings.updates {

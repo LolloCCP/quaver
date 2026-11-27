@@ -40,13 +40,15 @@ pub struct Settings {
     pub stage: u8,
     /// Draw with the graphics card; read only at start.
     pub gpu: bool,
+    /// Spotify links open in Rustbeat instead of the Spotify app.
+    pub links: bool,
     /// Timed lyrics shown around the sung line, one of LYRIC_LINES; 0 for all.
     pub lyric_lines: u8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1, gpu: true, lyric_lines: 0 }
+        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1, gpu: true, links: false, lyric_lines: 0 }
     }
 }
 
@@ -64,10 +66,10 @@ impl Settings {
     }
 
     fn text(&self) -> String {
-        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version, updates, stage, gpu, lyric_lines } = self;
+        let Self { bitrate, normalise, tray, tint, motion, theme, custom, soloist, offline, music, eq_on, eq, version, updates, stage, gpu, links, lyric_lines } = self;
         let custom = custom.map(hex).join(",");
         let eq = eq.map(|g| g.to_string()).join(",");
-        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\nupdates={updates}\nstage={stage}\ngpu={gpu}\nlyric_lines={lyric_lines}\n")
+        format!("bitrate={bitrate}\nnormalise={normalise}\ntray={tray}\ntint={tint}\nmotion={motion}\ntheme={theme}\ncustom={custom}\nsoloist={soloist}\noffline={offline}\nmusic={music}\neq_on={eq_on}\neq={eq}\nversion={version}\nupdates={updates}\nstage={stage}\ngpu={gpu}\nlinks={links}\nlyric_lines={lyric_lines}\n")
     }
 
     fn parse(text: &str) -> Self {
@@ -92,6 +94,7 @@ impl Settings {
                 "stage" => s.stage = value.parse().ok().filter(|v| *v < STAGES).unwrap_or(s.stage),
                 "updates" => s.updates = flag(s.updates),
                 "gpu" => s.gpu = flag(s.gpu),
+                "links" => s.links = flag(s.links),
                 "lyric_lines" => s.lyric_lines = value.parse().ok().filter(|n| LYRIC_LINES.contains(n)).unwrap_or(s.lyric_lines),
                 "eq_on" => s.eq_on = flag(s.eq_on),
                 "tint" => s.tint = value.parse().ok().filter(|t: &f32| t.is_finite()).unwrap_or(s.tint).clamp(MIN_TINT, 0.85),

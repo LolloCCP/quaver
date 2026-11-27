@@ -123,6 +123,7 @@ export component App inherits Window {
     in property <bool> tray;
     in property <bool> updates;
     in property <bool> gpu;
+    in property <bool> links;
     in property <bool> needs-restart;
     in property <bool> soloist;
     in property <string> player-note;
@@ -217,6 +218,7 @@ export component App inherits Window {
     callback set-tint(float);
     callback set-motion(bool);
     callback set-gpu(bool);
+    callback set-links(bool);
     callback set-lyric-lines(int);
     callback glide(float);
     in property <float> bounce;
@@ -574,6 +576,7 @@ export component App inherits Window {
                                 tray: root.tray;
                                 updates: root.updates;
                                 gpu: root.gpu;
+                                links: root.links;
                                 needs-restart: root.needs-restart;
                                 soloist: root.soloist;
                                 player-note: root.player-note;
@@ -615,6 +618,7 @@ export component App inherits Window {
                                 set-tint(v) => { root.set-tint(v); }
                                 set-motion(v) => { root.set-motion(v); }
                                 set-gpu(v) => { root.set-gpu(v); }
+                                set-links(v) => { root.set-links(v); }
                                 set-lyric-lines(v) => { root.set-lyric-lines(v); }
                                 logout => { root.settings-open = false; root.logout(); }
                             }
