@@ -169,15 +169,20 @@ component Lyrics inherits Rectangle {
                 // Lines fade out over the last 70px at the top and bottom, and a line that doesn't fit is hidden.
                 property <length> shown-y: self.y + flick.content-y;
                 property <float> edge: max(0, min(1, min(self.shown-y, root.height - self.shown-y - self.height) / 70px));
-                opacity: self.edge * (!root.synced || self.active || self.has-hover ? 1 : max(0.22, 0.62 - (abs(self.away) - 1) * 0.13) * (self.away < 0 ? 0.8 : 1));
+                // Past the chosen number of lines around the sung one, timed lyrics fade out.
+                property <bool> kept: !root.synced || Theme.lyric-lines == 0 || abs(self.away) * 2 < Theme.lyric-lines;
+                opacity: (self.kept ? 1 : 0) * self.edge * (!root.synced || self.active || self.has-hover ? 1 : max(0.22, 0.62 - (abs(self.away) - 1) * 0.13) * (self.away < 0 ? 0.8 : 1));
                 animate opacity { duration: Theme.quick * 2; easing: ease-in-out; }
                 words := Text {
                     x: line-area.indent;
-                    width: root.width - 24px;
+                    // Timed lines wrap as they would at the sung size, so growing never moves the line breaks.
+                    width: root.synced ? (root.width - 24px) * self.font-size / 32px : root.width - 24px;
                     text: line == "" ? "♪" : line;
                     wrap: word-wrap;
-                    font-size: !root.synced ? 18px : line-area.active ? 32px : 22px;
-                    animate font-size { duration: Theme.quick * 2; easing: ease-in-out; }
+                    property <length> size: !root.synced ? 18px : line-area.active ? 32px : 22px;
+                    animate size { duration: Theme.quick * 2; easing: ease-in-out; }
+                    // Whole pixels: the renderer caches letters for every size it is asked for.
+                    font-size: round(self.size / 1px) * 1px;
                     font-weight: root.synced ? 700 : 400;
                     color: line-area.has-hover && root.synced && !line-area.active ? Theme.accent : Theme.text;
                     animate color { duration: Theme.quick * 1.5; }
@@ -224,7 +229,8 @@ component SungLine inherits TouchArea {
         width: root.width;
         height: root.height;
         text: root.words;
-        font-size: (root.big + (root.small - root.big) * root.near) * root.fit;
+        // Whole pixels: the renderer caches letters for every size it is asked for.
+        font-size: round((root.big + (root.small - root.big) * root.near) * root.fit / 1px) * 1px;
         font-weight: 800;
         color: Theme.text;
         vertical-alignment: center;
@@ -718,6 +724,7 @@ export component SettingsView inherits ScrollView {
     callback set-tint(float);
     callback set-motion(bool);
     callback set-gpu(bool);
+    callback set-lyric-lines(int);
     callback logout();
     property <[string]> labels: ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
     content-width: self.visible-width;
@@ -768,6 +775,11 @@ export component SettingsView inherits ScrollView {
             }
             Switch { text: "Motion effects"; note: "Animations, pointer light and gliding scrolling"; checked: Theme.motion; toggled(on) => { root.set-motion(on); } }
             Switch { text: "Hardware acceleration"; note: "Smoother movement, drawn by the graphics card. Applies after a restart"; checked: root.gpu; toggled(on) => { root.set-gpu(on); } }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "Lyrics lines"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                for n in [1, 3, 5, 9, 0]: Pill { quiet: true; text: n == 0 ? "All" : n; selected: Theme.lyric-lines == n; clicked => { root.set-lyric-lines(n); } }
+            }
         }
         Section {
             text: "Player";

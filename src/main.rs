@@ -466,6 +466,7 @@ impl Ui {
         app.set_gpu(s.gpu);
         app.set_stage_style(s.stage.into());
         app.global::<Theme>().set_motion(s.motion);
+        app.global::<Theme>().set_lyric_lines(s.lyric_lines.into());
         app.set_soloist(s.soloist);
         app.set_offline(s.offline);
         app.set_music(s.music.as_str().into());
@@ -1728,6 +1729,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     app.on_soloist_get_key(|| open("https://developer.spotify.com/dashboard/soloist".as_ref()));
     app.on_set_motion(|on| with_ui(|ui| ui.change_settings(|s| s.motion = on)));
+    app.on_set_lyric_lines(|n| with_ui(|ui| ui.change_settings(|s| s.lyric_lines = u8::try_from(n).ok().filter(|n| settings::LYRIC_LINES.contains(n)).unwrap_or(0))));
     app.on_set_gpu(|on| with_ui(|ui| ui.change_settings(|s| s.gpu = on)));
     app.on_set_tray(|on| with_ui(|ui| ui.change_settings(|s| s.tray = on)));
     app.on_set_updates({

@@ -204,6 +204,7 @@ export component App inherits Window {
     callback set-tint(float);
     callback set-motion(bool);
     callback set-gpu(bool);
+    callback set-lyric-lines(int);
     callback glide(float);
     in property <float> bounce;
 
@@ -588,6 +589,7 @@ export component App inherits Window {
                                 set-tint(v) => { root.set-tint(v); }
                                 set-motion(v) => { root.set-motion(v); }
                                 set-gpu(v) => { root.set-gpu(v); }
+                                set-lyric-lines(v) => { root.set-lyric-lines(v); }
                                 logout => { root.settings-open = false; root.logout(); }
                             }
                         }

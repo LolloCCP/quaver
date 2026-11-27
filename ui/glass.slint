@@ -11,6 +11,8 @@ export global Theme {
     in property <image> glow;
     in property <float> tint: 0.45;
     in property <bool> motion: true;
+    // How many timed lyric lines show around the sung one; 0 for all.
+    in property <int> lyric-lines;
     out property <duration> quick: root.motion ? 200ms : 0ms;
     // From the theme (art::Style): what makes things stand out on a surface, white or black.
     in property <color> over: white;
