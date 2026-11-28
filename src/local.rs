@@ -456,6 +456,15 @@ impl Player {
                     self.show_queue();
                 }
             }
+            Cmd::EditQueue { uri, nth, to } => {
+                if !self.sequence.edit((&uri, nth), to.as_ref().map(|(u, n)| (u.as_str(), *n))) {
+                    (self.emit)(Event::Status("Queued songs and the list's own songs move only among themselves.".into()));
+                }
+                // The view had already changed; this puts it right if that didn't work.
+                if self.queue_shown {
+                    self.show_queue();
+                }
+            }
             Cmd::Toggle => self.set_playing(!self.playing()),
             Cmd::Resume => self.set_playing(true),
             Cmd::Pause => self.set_playing(false),

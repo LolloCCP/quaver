@@ -33,7 +33,7 @@ const QUEUE_TOLD: usize = 10;
 /// How often to look whether Windows plays somewhere else now.
 pub const OUTPUT_CHECK: Duration = Duration::from_secs(2);
 /// How often to look for a Jam.
-const JAM_CHECK: Duration = Duration::from_secs(15);
+pub const JAM_CHECK: Duration = Duration::from_secs(15);
 /// A paired Soloist says it isn't signed in, too, until it has reached Spotify.
 const SIGN_IN: Duration = Duration::from_secs(5);
 /// Pressing "previous" later than this into a song restarts it.
@@ -506,6 +506,11 @@ impl Player {
                 Ok(())
             }
             Cmd::ClearQueue => connect.clear_queue().await,
+            Cmd::EditQueue { uri, nth, to } => connect.edit_queue((&uri, nth), to.as_ref().map(|(u, n)| (u.as_str(), *n))).await,
+            Cmd::JoinJam(uri) => {
+                tokio::spawn(crate::backend::join_jam(library.session.clone(), connect.clone(), uri, self.emit.clone()));
+                Ok(())
+            }
             Cmd::Toggle | Cmd::Resume if !self.active => {
                 if let Err(e) = connect.take_over().await {
                     log::warn!("connect take over: {e}");
@@ -721,6 +726,8 @@ impl Player {
         match cmd {
             Cmd::Play { context, track } => self.play(if track.is_empty() { &context } else { &track }).await,
             Cmd::ClearQueue => (self.emit)(Event::Status("The queue belongs to the Jam and can't be cleared here.".into())),
+            Cmd::EditQueue { .. } => (self.emit)(Event::Status("The queue belongs to the Jam and can't be changed here.".into())),
+            Cmd::JoinJam(_) => (self.emit)(Event::Status("You're in a Jam already; leave it in the Spotify app first.".into())),
             cmd => self.command(cmd).await,
         }
     }

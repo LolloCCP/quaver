@@ -189,7 +189,12 @@ fn hwnd(app: &App) -> Option<*mut c_void> {
 fn take_link(file: &std::path::Path) -> Option<String> {
     let text = std::fs::read_to_string(file).ok()?;
     let _ = std::fs::remove_file(file);
-    links::uri_of(&text)
+    link_of(&text)
+}
+
+/// What Rustbeat opens: a song, list or person, or a Jam to join.
+fn link_of(text: &str) -> Option<String> {
+    links::uri_of(text).or_else(|| links::jam_of(text))
 }
 
 /// Opens a page or folder the way a double-click would.
@@ -256,6 +261,14 @@ impl Ui {
             self.link = Some(uri);
             return;
         }
+        if uri.starts_with("spotify:socialsession:") {
+            if !self.shared.lock().offline {
+                let _ = self.tx.send(Cmd::JoinJam(uri));
+            } else if let Err(e) = links::pass_on(&uri) {
+                self.toast(&format!("The Jam could not be joined: {e}"));
+            }
+            return;
+        }
         if self.shared.lock().offline {
             return self.toast("Spotify links need Spotify; Rustbeat is playing your own files.");
         }
@@ -279,7 +292,8 @@ impl Ui {
     /// What the open list lets one change.
     fn mark_list(&self) {
         let context = self.app.get_list_context();
-        self.app.set_list_editable(self.editable.contains(context.as_str()));
+        // An empty context is the queue.
+        self.app.set_list_editable(context.is_empty() || self.editable.contains(context.as_str()));
         self.app.set_list_own(self.owned.contains(context.as_str()));
     }
 
@@ -1345,7 +1359,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let data_dir = PathBuf::from(local).join("Rustbeat");
     // A link Windows started Rustbeat with waits in a file, for whichever Rustbeat runs.
     let link_file = data_dir.join("open-link.txt");
-    if let Some(uri) = std::env::args().nth(1).as_deref().and_then(links::uri_of) {
+    if let Some(uri) = std::env::args().nth(1).as_deref().and_then(link_of) {
         let _ = std::fs::create_dir_all(&data_dir);
         if let Err(e) = std::fs::write(&link_file, uri) {
             log::warn!("link: {e}");
@@ -1479,13 +1493,15 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     app.on_remove_song(|row| with_ui(|ui| {
         let Some((uri, nth)) = usize::try_from(row).ok().and_then(|row| ui.song(row)) else { return };
-        let _ = ui.tx.send(Cmd::RemoveSong { playlist: ui.app.get_list_context().into(), uri, nth });
+        let playlist: String = ui.app.get_list_context().into();
+        let _ = ui.tx.send(if playlist.is_empty() { Cmd::EditQueue { uri, nth, to: None } } else { Cmd::RemoveSong { playlist, uri, nth } });
         ui.rows.remove(row as usize);
     }));
     app.on_move_song(|row, to| with_ui(|ui| {
         let (Ok(row), Ok(to)) = (usize::try_from(row), usize::try_from(to)) else { return };
         let (Some((uri, nth)), Some((other, other_nth))) = (ui.song(row), ui.song(to)) else { return };
-        let _ = ui.tx.send(Cmd::MoveSong { playlist: ui.app.get_list_context().into(), uri, nth, other, other_nth });
+        let playlist: String = ui.app.get_list_context().into();
+        let _ = ui.tx.send(if playlist.is_empty() { Cmd::EditQueue { uri, nth, to: Some((other, other_nth)) } } else { Cmd::MoveSong { playlist, uri, nth, other, other_nth } });
         let moving = ui.rows.remove(row);
         ui.rows.insert(to, moving);
     }));

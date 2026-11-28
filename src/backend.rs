@@ -37,8 +37,10 @@ use tokio::{
 };
 
 use crate::{
+    connect::Connect,
     eq::EqSink,
     library,
+    links,
     local,
     settings::Shared,
     people::{self, Profile},
@@ -69,6 +71,11 @@ pub enum Cmd {
     More,
     Enqueue(String),
     ClearQueue,
+    /// Takes a song that is to come out (`to` is none), or moves it to the place of another; songs
+    /// are counted as in `RemoveSong`.
+    EditQueue { uri: String, nth: usize, to: Option<(String, usize)> },
+    /// Joins a Jam by its URI (see `links::jam_of`).
+    JoinJam(String),
     /// Load the home page, unless that was done a moment ago and `again` isn't set.
     Home { again: bool },
     /// Show a profile by its URI, or friends if that is empty.
@@ -189,6 +196,36 @@ pub struct Jam {
 }
 
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
+
+/// How long the Spotify app gets to join a Jam, in checks two seconds apart.
+const JOIN_CHECKS: usize = 45;
+
+/// Joins a Jam here. If Spotify won't have that, the Spotify app joins it; then the music moves
+/// here and the app closes again, unless it was open before.
+pub async fn join_jam(session: Session, connect: Connect, uri: String, emit: Emit) {
+    let token = uri.trim_start_matches("spotify:socialsession:");
+    let Err(e) = connect.join(token).await else { return emit(Event::Status("You're in the Jam.".into())) };
+    log::warn!("jam join: {e}");
+    let was_open = links::theirs_running();
+    if let Err(e) = links::pass_on(&uri) {
+        return emit(Event::Status(format!("The Jam could not be joined: {e}")));
+    }
+    emit(Event::Status("Joining the Jam through the Spotify app…".into()));
+    for _ in 0..JOIN_CHECKS {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if !matches!(Library::jam(&session).await, Ok(Some(_))) {
+            continue;
+        }
+        if let Err(e) = connect.take_over().await {
+            return emit(Event::Status(format!("You're in the Jam, but it couldn't be moved here: {}. Pick Rustbeat as the speaker in the Spotify app.", e.error)));
+        }
+        if !was_open {
+            links::close_theirs();
+        }
+        return emit(Event::Status("You're in the Jam, and it plays here.".into()));
+    }
+    emit(Event::Status("The Spotify app didn't join the Jam in time.".into()));
+}
 
 /// What made a connected session end.
 pub enum End {
@@ -482,10 +519,40 @@ async fn connected(
     // Whether Spotify unlocks songs for this player, asked once, when something is first played.
     let (refusal_tx, mut refusal) = mpsc::unbounded_channel();
     let mut asked = false;
+    let mut jam_check = tokio::time::interval(soloist::JAM_CHECK);
+    let (jam_tx, mut jams) = mpsc::unbounded_channel();
+    let mut jam: Option<Jam> = None;
+    // The account's autoplay, from before the Jam.
+    let mut autoplay: Option<String> = None;
 
     let end = loop {
         tokio::select! {
             _ = &mut spirc_task => break End::Lost,
+            _ = jam_check.tick() => {
+                let (session, tx) = (session.clone(), jam_tx.clone());
+                tokio::spawn(async move {
+                    match Library::jam(&session).await {
+                        Ok(jam) => drop(tx.send(jam)),
+                        Err(e) => log::info!("jam: {e}"),
+                    }
+                });
+            }
+            Some(now) = jams.recv() => {
+                // librespot goes on from a list that runs out with songs of its own choosing,
+                // which would come before what the Jam queues. Again each time: Spotify may turn it back on.
+                if now.is_some() {
+                    let old = session.set_user_attribute("autoplay", "0");
+                    if jam.is_none() {
+                        autoplay = old;
+                    }
+                } else if jam.is_some() && let Some(old) = autoplay.take() {
+                    session.set_user_attribute("autoplay", &old);
+                }
+                if now != jam {
+                    emit(Event::Jam(now.clone()));
+                    jam = now;
+                }
+            }
             cmd = rx.recv() => {
                 let cmd = match cmd {
                     Some(Cmd::Quit) | None => break End::Quit,
@@ -535,6 +602,24 @@ async fn connected(
                         SpotifyUri::from_uri(&uri).and_then(|uri| spirc.add_to_queue(uri))
                     }
                     Cmd::ClearQueue => spirc.clear_queue(),
+                    // Spirc can't do this itself; Spotify passes the new queue back to it.
+                    Cmd::EditQueue { uri, nth, to } => {
+                        let (connect, emit) = (Connect::here(session.clone()), emit.clone());
+                        tokio::spawn(async move {
+                            if let Err(e) = connect.edit_queue((&uri, nth), to.as_ref().map(|(u, n)| (u.as_str(), *n))).await {
+                                emit(Event::Status(format!("The queue could not be changed: {}. Open it again to see it as it is.", e.error)));
+                            }
+                        });
+                        Ok(())
+                    }
+                    Cmd::JoinJam(_) if jam.is_some() => {
+                        emit(Event::Status("You're in a Jam already; leave it in the Spotify app first.".into()));
+                        Ok(())
+                    }
+                    Cmd::JoinJam(uri) => {
+                        tokio::spawn(join_jam(session.clone(), Connect::here(session.clone()), uri, emit.clone()));
+                        Ok(())
+                    }
                     Cmd::Toggle => spirc.play_pause(),
                     Cmd::Resume => spirc.play(),
                     Cmd::Pause => spirc.pause(),

@@ -10,19 +10,78 @@ pub fn uri_of(text: &str) -> Option<String> {
     if let Some(user) = crate::people::linked(text) {
         return Some(user);
     }
-    let (kind, id) = match text.strip_prefix("spotify:") {
+    let (kind, id) = parts(text)?;
+    // Spotify's ids are 22 letters and digits; it becomes part of an address.
+    let valid = ["track", "album", "playlist", "artist"].contains(&kind) && id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric());
+    valid.then(|| format!("spotify:{kind}:{id}"))
+}
+
+/// What a link is to, and its id.
+fn parts(text: &str) -> Option<(&str, &str)> {
+    let (kind, id) = match text.trim().strip_prefix("spotify:") {
         // Some pages write spotify://track/ID.
         Some(rest) => rest.trim_start_matches("//").split_once([':', '/'])?,
         None => {
+            let text = text.trim();
             let path = text.strip_prefix("https://").or_else(|| text.strip_prefix("http://")).unwrap_or(text).strip_prefix("open.spotify.com/")?;
             let path = path.split_once('/').filter(|(first, _)| first.starts_with("intl-")).map_or(path, |(_, rest)| rest);
             path.split_once('/')?
         }
     };
-    let id = id.split(['?', '#', '/']).next()?;
-    // Spotify's ids are 22 letters and digits; it becomes part of an address.
-    let valid = ["track", "album", "playlist", "artist"].contains(&kind) && id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric());
-    valid.then(|| format!("spotify:{kind}:{id}"))
+    Some((kind, id.split(['?', '#', '/']).next()?))
+}
+
+/// A Jam invite, as the URI the Spotify app joins it by.
+pub fn jam_of(text: &str) -> Option<String> {
+    let (kind, id) = parts(text)?;
+    // It goes into a command line: only letters, digits, - and _.
+    let valid = kind == "socialsession" && (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    valid.then(|| format!("spotify:socialsession:{id}"))
+}
+
+/// Hands a link to the program Rustbeat took `spotify:` links from: Rustbeat can't join a Jam
+/// itself, the Spotify app does, and can then pick Rustbeat as its speaker.
+pub fn pass_on(uri: &str) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let theirs = get(COMMAND, KEPT).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no other program opened Spotify links before Rustbeat"))?;
+    let (program, args) = split_command(&theirs);
+    std::process::Command::new(program).raw_arg(args.replace("%1", uri)).spawn().map(drop)
+}
+
+/// The file of the program `pass_on` starts, such as Spotify.exe.
+fn their_exe() -> Option<String> {
+    let command = get(COMMAND, KEPT)?;
+    Path::new(split_command(&command).0).file_name()?.to_str().map(str::to_owned)
+}
+
+fn system_tool(program: &str, args: &[&str]) -> Option<std::process::Output> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let system = Path::new(&std::env::var_os("SystemRoot")?).join("System32");
+    std::process::Command::new(system.join(program)).args(args).creation_flags(CREATE_NO_WINDOW).output().ok()
+}
+
+/// Whether the program `pass_on` starts already runs.
+pub fn theirs_running() -> bool {
+    let Some(exe) = their_exe() else { return false };
+    let listed = system_tool("tasklist.exe", &["/FI", &format!("IMAGENAME eq {exe}"), "/NH"]);
+    listed.is_some_and(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains(&exe.to_lowercase()))
+}
+
+/// Closes the program `pass_on` started.
+pub fn close_theirs() {
+    if let Some(exe) = their_exe() {
+        system_tool("taskkill.exe", &["/IM", &exe, "/F"]);
+    }
+}
+
+/// A command as the registry keeps it: the program, maybe in quotes, then its arguments.
+fn split_command(command: &str) -> (&str, &str) {
+    let command = command.trim();
+    match command.strip_prefix('"').and_then(|rest| rest.split_once('"')) {
+        Some((program, args)) => (program, args.trim()),
+        None => command.split_once(' ').map_or((command, ""), |(program, args)| (program, args.trim())),
+    }
 }
 
 const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
@@ -102,7 +161,20 @@ pub fn handle(exe: &Path, on: bool) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::uri_of;
+    use super::{jam_of, split_command, uri_of};
+
+    #[test]
+    fn jam_invites_go_to_the_spotify_app() {
+        for link in ["https://open.spotify.com/socialsession/Ab3_x-9?si=1", "spotify:socialsession:Ab3_x-9", "open.spotify.com/intl-it/socialsession/Ab3_x-9"] {
+            assert_eq!(jam_of(link).as_deref(), Some("spotify:socialsession:Ab3_x-9"), "{link}");
+        }
+        for bad in ["spotify:socialsession:a\"b", "spotify:socialsession:", "spotify:socialsession:a b", "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"] {
+            assert_eq!(jam_of(bad), None, "{bad}");
+        }
+        assert_eq!(uri_of("spotify:socialsession:Ab3"), None, "not something Rustbeat opens");
+        assert_eq!(split_command(r#""C:\Spot ify\Spotify.exe" --protocol-uri="%1""#), (r"C:\Spot ify\Spotify.exe", r#"--protocol-uri="%1""#));
+        assert_eq!(split_command(r"C:\Spotify.exe %1"), (r"C:\Spotify.exe", "%1"));
+    }
 
     #[test]
     fn links_become_uris() {

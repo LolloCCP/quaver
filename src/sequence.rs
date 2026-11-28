@@ -98,6 +98,36 @@ impl Sequence {
         self.current.is_some()
     }
 
+    /// See `Cmd::EditQueue`. False if a song isn't there, or would leave its part: the queue or the list.
+    pub fn edit(&mut self, (uri, nth): (&str, usize), to: Option<(&str, usize)>) -> bool {
+        let upcoming = self.upcoming(usize::MAX);
+        let find = |uri: &str, nth| upcoming.iter().enumerate().filter(|(_, u)| *u == uri).nth(nth).map(|(i, _)| i);
+        let Some(from) = find(uri, nth) else { return false };
+        let to = match to {
+            Some((uri, nth)) => match find(uri, nth) {
+                Some(to) => Some(to),
+                None => return false,
+            },
+            None => None,
+        };
+        let queued = self.queued.len();
+        if to.is_some_and(|to| (to < queued) != (from < queued)) {
+            return false;
+        }
+        if from < queued {
+            if let Some(song) = self.queued.remove(from) && let Some(to) = to {
+                self.queued.insert(to, song);
+            }
+        } else {
+            let in_order = |i: usize| self.at + 1 + i - queued;
+            let song = self.order.remove(in_order(from));
+            if let Some(to) = to {
+                self.order.insert(in_order(to), song);
+            }
+        }
+        true
+    }
+
     pub fn upcoming(&self, count: usize) -> Vec<String> {
         let rest = self.order.iter().skip(self.at + 1).map(|o| &self.tracks[*o]);
         self.queued.iter().chain(rest).take(count).cloned().collect()
@@ -153,6 +183,21 @@ mod tests {
         s.enqueue("q".into());
         s.clear_queue();
         assert_eq!(s.ran_out(), Some("b".into()));
+    }
+
+    #[test]
+    fn songs_to_come_move_and_go_within_their_part() {
+        let mut s = Sequence::default();
+        s.start(list("abcd"), "a");
+        s.enqueue("q".into());
+        s.enqueue("r".into());
+        assert!(s.edit(("r", 0), Some(("q", 0))));
+        assert!(s.edit(("d", 0), Some(("b", 0))));
+        assert_eq!(s.upcoming(9), list("rqdbc"));
+        assert!(!s.edit(("b", 0), Some(("q", 0))), "into the queue");
+        assert!(!s.edit(("x", 0), None), "not there");
+        assert!(s.edit(("q", 0), None) && s.edit(("c", 0), None));
+        assert_eq!((0..4).map_while(|_| s.ran_out()).collect::<String>(), "rdb");
     }
 
     #[test]

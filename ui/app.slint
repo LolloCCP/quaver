@@ -549,6 +549,10 @@ export component App inherits Window {
                                     editable: root.list-editable;
                                     first: i == 0;
                                     last: i == root.rows.length - 1;
+                                    index: i;
+                                    count: root.rows.length;
+                                    in-queue: root.list-context == "";
+                                    drag-to(steps) => { root.move-song(i, i + steps); }
                                     remove => { root.remove-song(i); }
                                     move-up => { root.move-song(i, i - 1); }
                                     move-down => { root.move-song(i, i + 1); }
@@ -725,7 +729,7 @@ export component App inherits Window {
                         width: max(240px, root.width * 0.24);
                         spacing: 4px;
                         alignment: end;
-                        if root.soloist: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: root.jam.length > 0 ? "Jam, " + root.jam.length + " listening" : "Jam"; on: root.jam.length > 0; clicked => { root.jam-open = !root.jam-open; } } }
+                        if !root.offline: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: root.jam.length > 0 ? "Jam, " + root.jam.length + " listening" : "Jam"; on: root.jam.length > 0; clicked => { root.jam-open = !root.jam-open; } } }
                         VerticalLayout { alignment: center; Icon { glyph: "\u{e8bd}"; label: "Open lyrics"; clicked => { root.lyrics-open = true; root.now-playing = true; } } }
                         VerticalLayout { alignment: center; Icon { glyph: "\u{e8fd}"; label: "Up next"; on: root.list-shown && root.list-title == "Up next"; clicked => { root.show-list("", ""); root.queue(); } } }
                         if root.width >= 1160px: VerticalLayout { alignment: center; Icon { glyph: "\u{e90d}"; label: root.panel-open ? "Close the now playing panel" : "Open the now playing panel"; on: root.panel-shown; clicked => { root.panel-open = !root.panel-open; } } }
@@ -882,7 +886,7 @@ export component App inherits Window {
                     padding: 22px;
                     spacing: 12px;
                     Text { text: root.jam.length > 0 ? "Jam" : "No Jam right now"; color: Theme.text; font-size: 18px; font-weight: 700; }
-                    if root.jam.length == 0: Text { text: "Start or join one in the Spotify app and pick Rustbeat as the speaker. It shows up here, and Rustbeat leaves the order of songs to the Jam."; color: Theme.dim; wrap: word-wrap; }
+                    if root.jam.length == 0: Text { text: "Open a Jam invite link to join it here, or start one in the Spotify app and pick Rustbeat as the speaker. It shows up here, and Rustbeat leaves the order of songs to the Jam."; color: Theme.dim; wrap: word-wrap; }
                     for name in root.jam: HorizontalLayout {
                         spacing: 10px;
                         Text { width: 18px; text: "\u{e77b}"; font-family: Theme.icons; color: Theme.accent; vertical-alignment: center; }

@@ -16,9 +16,18 @@ export component Row inherits Rectangle {
     in property <bool> editable;
     in property <bool> first;
     in property <bool> last;
+    // Where it is among how many, so a drag stays inside the list.
+    in property <int> index;
+    in property <int> count;
+    // The queue's songs are taken out of the queue, not out of a playlist.
+    in property <bool> in-queue;
     callback remove();
     callback move-up();
     callback move-down();
+    // Rows down (or up, if less than 0) the song was dragged.
+    callback drag-to(int);
+    property <int> steps;
+    z: root.steps != 0 ? 1 : 0;
     callback play();
     callback enqueue();
     callback like(bool);
@@ -40,6 +49,15 @@ export component Row inherits Rectangle {
         }
     }
     TouchArea { double-clicked => { root.play(); } }
+    // Where a dragged song will go: under the row it passes going down, over it going up.
+    if root.steps != 0: Rectangle {
+        x: 12px;
+        width: parent.width - 24px;
+        y: (root.steps > 0 ? root.steps + 1 : root.steps) * root.height - 1px;
+        height: 3px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
     Rectangle {
         width: 100%;
         height: 100%;
@@ -108,6 +126,22 @@ export component Row inherits Rectangle {
                 alignment: center;
                 Icon { opacity: root.lit ? 1 : 0; glyph: "\u{ecc8}"; label: "Add to playlist: " + item.title; size: 13px; clicked => { root.add-to(); } }
             }
+            // Mouse only; the buttons beside it do the same from the keyboard.
+            // shortcut: the list doesn't scroll while dragging, so a song goes at most a screen at a time; scroll in steps for longer moves.
+            if root.editable: VerticalLayout {
+                alignment: center;
+                grip := TouchArea {
+                    width: 24px;
+                    height: 32px;
+                    mouse-cursor: self.pressed ? grabbing : grab;
+                    moved => { root.steps = max(-root.index, min(root.count - 1 - root.index, round((self.mouse-y - self.pressed-y) / root.height))); }
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.up && root.steps != 0) { root.drag-to(root.steps); }
+                        if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.steps = 0; }
+                    }
+                    Text { text: "\u{e76f}"; font-family: Theme.icons; font-size: 13px; color: grip.has-hover || grip.pressed ? Theme.text : Theme.dim; opacity: root.lit || grip.pressed ? 1 : 0; horizontal-alignment: center; vertical-alignment: center; accessible-role: none; }
+                }
+            }
             if root.editable: VerticalLayout {
                 alignment: center;
                 Icon { opacity: root.lit && !root.first ? 1 : 0; enabled: !root.first; glyph: "\u{e70e}"; label: "Move up: " + item.title; size: 13px; clicked => { root.move-up(); } }
@@ -118,7 +152,7 @@ export component Row inherits Rectangle {
             }
             if root.editable: VerticalLayout {
                 alignment: center;
-                Icon { opacity: root.lit ? 1 : 0; glyph: "\u{e74d}"; label: "Remove from this playlist: " + item.title; size: 13px; clicked => { root.remove(); } }
+                Icon { opacity: root.lit ? 1 : 0; glyph: "\u{e74d}"; label: (root.in-queue ? "Remove from queue: " : "Remove from this playlist: ") + item.title; size: 13px; clicked => { root.remove(); } }
             }
             VerticalLayout {
                 alignment: center;
