@@ -506,6 +506,8 @@ impl Player {
                 Ok(())
             }
             Cmd::ClearQueue => connect.clear_queue().await,
+            Cmd::Shuffle(on) => self.set_options(connect, json!({ "shuffling_context": on }), cmd).await,
+            Cmd::Repeat(mode) => self.set_options(connect, json!({ "repeating_context": mode == 1, "repeating_track": mode == 2 }), cmd).await,
             Cmd::EditQueue { uri, nth, to } => connect.edit_queue((&uri, nth), to.as_ref().map(|(u, n)| (u.as_str(), *n))).await,
             Cmd::JoinJam(uri) => {
                 tokio::spawn(crate::backend::join_jam(library.session.clone(), connect.clone(), uri, self.emit.clone()));
@@ -570,9 +572,6 @@ impl Player {
             self.follow();
         }
         self.options(&event["options"]);
-        if let Some(actions) = event["available_actions"].as_object() {
-            (self.emit)(Event::Allowed { shuffle: actions.contains_key("set_shuffle"), repeat: actions.contains_key("set_repeat") });
-        }
         match event["type"].as_str().unwrap_or_default() {
             "auth_state" => {
                 let paired = event["logged_in"].as_bool().unwrap_or(false);
@@ -724,6 +723,15 @@ impl Player {
         self.jam = jam;
     }
 
+    /// Sets shuffle or repeat through Spotify Connect, or else with Soloist's own command.
+    async fn set_options(&mut self, connect: &Connect, options: Value, cmd: Cmd) -> Result<(), Error> {
+        if let Err(e) = connect.set_options(options).await {
+            log::warn!("connect options: {e}");
+            self.command(cmd).await;
+        }
+        Ok(())
+    }
+
     /// In a Jam nothing is arranged here: everything is passed on as it is.
     async fn jam_command(&mut self, cmd: Cmd) {
         match cmd {
@@ -819,12 +827,6 @@ mod tests {
         drop(seen);
         p.event(&json!({ "type": "playback_state", "status": "playing", "item": song("a"), "is_active": true })).await;
         assert!(p.playing, "and back again");
-        // As Soloist says it for a Daily Mix, and then for a playlist.
-        p.event(&json!({ "type": "playback_state", "available_actions": { "play": {}, "skip_next": {} } })).await;
-        p.event(&json!({ "type": "playback_state", "available_actions": { "set_shuffle": {}, "set_repeat": {} } })).await;
-        let seen = events.lock().unwrap();
-        let allowed: Vec<_> = seen.iter().filter_map(|e| if let Event::Allowed { shuffle, repeat } = *e { Some((shuffle, repeat)) } else { None }).collect();
-        assert_eq!(allowed, [(false, false), (true, true)]);
     }
 
     #[tokio::test]

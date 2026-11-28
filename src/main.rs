@@ -881,15 +881,8 @@ impl Ui {
                 app.set_busy(false);
                 app.set_message(message.into());
             }
-            Event::Allowed { shuffle, repeat } => {
-                app.global::<Playing>().set_can_shuffle(shuffle);
-                app.global::<Playing>().set_can_repeat(repeat);
-            }
             Event::Ready => {
                 app.set_ready(true);
-                // Only Soloist says otherwise.
-                app.global::<Playing>().set_can_shuffle(true);
-                app.global::<Playing>().set_can_repeat(true);
                 if let Some(uri) = self.link.take() {
                     self.open_link(uri);
                 }

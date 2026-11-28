@@ -75,6 +75,15 @@ impl Connect {
         self.session.spclient().request_as_json(&http::Method::POST, &path, None, None).await.map(drop)
     }
 
+    /// Shuffle and repeat as Spotify's apps set them (`shuffling_context`, `repeating_context`,
+    /// `repeating_track`). Soloist's own commands are refused for some lists that these can change.
+    pub async fn set_options(&self, mut options: Value) -> Result<(), Error> {
+        let state = self.state().await?;
+        options["endpoint"] = "set_options".into();
+        options["logging_params"] = json!({});
+        self.send(self.playing_on(&state), options).await
+    }
+
     /// The queue is wherever the music is.
     fn playing_on<'a>(&'a self, state: &'a Value) -> &'a str {
         state["active_device_id"].as_str().filter(|d| !d.is_empty()).unwrap_or(&self.soloist)

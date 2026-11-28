@@ -35,9 +35,6 @@ export global Playing {
     // Liked Songs is "liked" in the library but a collection URI when played.
     in property <bool> liked;
     in property <bool> playing;
-    // Spotify forbids both for some lists, such as a Daily Mix.
-    in property <bool> can-shuffle: true;
-    in property <bool> can-repeat: true;
     public pure function from(uri: string) -> bool {
         return root.context != "" && (uri == root.context || (uri == "liked" && root.liked));
     }
@@ -579,11 +576,11 @@ export component Transport inherits HorizontalLayout {
     callback set-repeat(int);
     alignment: center;
     spacing: 10px;
-    VerticalLayout { alignment: center; Icon { glyph: "\u{e8b1}"; enabled: Playing.can-shuffle; label: !Playing.can-shuffle ? "Spotify doesn't allow shuffle for this list" : root.shuffle ? "Turn shuffle off" : "Turn shuffle on"; on: root.shuffle; clicked => { root.set-shuffle(!root.shuffle); } } }
+    VerticalLayout { alignment: center; Icon { glyph: "\u{e8b1}"; label: root.shuffle ? "Turn shuffle off" : "Turn shuffle on"; on: root.shuffle; clicked => { root.set-shuffle(!root.shuffle); } } }
     VerticalLayout { alignment: center; Icon { glyph: "\u{e892}"; label: "Previous"; clicked => { root.prev(); } } }
     PlayButton { playing: root.playing; size: root.size; clicked => { root.toggle(); } }
     VerticalLayout { alignment: center; Icon { glyph: "\u{e893}"; label: "Next"; clicked => { root.next(); } } }
-    VerticalLayout { alignment: center; Icon { glyph: root.repeat == 2 ? "\u{e8ed}" : "\u{e8ee}"; enabled: Playing.can-repeat; label: !Playing.can-repeat ? "Spotify doesn't allow repeat for this list" : root.repeat == 0 ? "Repeat all" : root.repeat == 1 ? "Repeat this song" : "Turn repeat off"; on: root.repeat != 0; clicked => { root.set-repeat(mod(root.repeat + 1, 3)); } } }
+    VerticalLayout { alignment: center; Icon { glyph: root.repeat == 2 ? "\u{e8ed}" : "\u{e8ee}"; label: root.repeat == 0 ? "Repeat all" : root.repeat == 1 ? "Repeat this song" : "Turn repeat off"; on: root.repeat != 0; clicked => { root.set-repeat(mod(root.repeat + 1, 3)); } } }
 }
 
 export component Timeline inherits HorizontalLayout {
