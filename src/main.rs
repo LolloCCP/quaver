@@ -43,6 +43,8 @@ const THUMB: f32 = 66.;
 const FADE_MS: i64 = 700;
 /// Panels that are painted: library, main, player bar, now playing.
 const PANELS: usize = 4;
+/// How often Windows hears the position while playing; readers trust it for 5 s at most.
+const MEDIA_CLOCK: Duration = Duration::from_secs(2);
 const STARTING: &str = "Starting…";
 /// Longest double-click Windows allows by default.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
@@ -62,6 +64,8 @@ struct Ui {
     tray: Tray,
     rows: Rc<VecModel<TrackRow>>,
     media: Option<MediaControls>,
+    /// Says the position to Windows again while playing; see `tell_position`.
+    media_clock: slint::Timer,
     duration_ms: u32,
     /// Position at `since`; it keeps moving only while `playing`.
     position_ms: u32,
@@ -330,6 +334,19 @@ impl Ui {
         self.media_update(|m| {
             m.set_playback(if playing { MediaPlayback::Playing { progress } } else { MediaPlayback::Paused { progress } })
         });
+        if !playing {
+            self.media_clock.stop();
+        } else if !self.media_clock.running() {
+            self.media_clock.start(slint::TimerMode::Repeated, MEDIA_CLOCK, || with_ui(Ui::tell_position));
+        }
+    }
+
+    /// Windows keeps the position with the time it was given, and what reads it, such as a lyrics
+    /// overlay in a game, stops counting on from it after a few seconds, as Spotify's app says it
+    /// again all the time. Without the window, as in the tray.
+    fn tell_position(&mut self) {
+        let progress = Some(MediaPosition(Duration::from_millis(self.now_ms().into())));
+        self.media_update(|m| m.set_playback(MediaPlayback::Playing { progress }));
     }
 
     /// Fetches the current song's lyrics once they can be seen.
@@ -1944,6 +1961,7 @@ fn main() -> Result<(), slint::PlatformError> {
         tray,
         rows,
         media: None,
+        media_clock: slint::Timer::default(),
         duration_ms: 0,
         position_ms: 0,
         since: Instant::now(),
