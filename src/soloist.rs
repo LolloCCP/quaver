@@ -570,6 +570,9 @@ impl Player {
             self.follow();
         }
         self.options(&event["options"]);
+        if let Some(actions) = event["available_actions"].as_object() {
+            (self.emit)(Event::Allowed { shuffle: actions.contains_key("set_shuffle"), repeat: actions.contains_key("set_repeat") });
+        }
         match event["type"].as_str().unwrap_or_default() {
             "auth_state" => {
                 let paired = event["logged_in"].as_bool().unwrap_or(false);
@@ -811,11 +814,17 @@ mod tests {
         p.remember();
         p.event(&json!({ "type": "auth_state", "logged_in": true, "is_active": false })).await;
         assert_eq!(settled(&sent).await, ["set_volume 50"], "nothing is queued, skipped or started, also not after a restart");
-        let events = events.lock().unwrap();
-        assert!(events.iter().any(|e| matches!(e, Event::Repeat(1))) && events.iter().any(|e| matches!(e, Event::Shuffle(true))));
-        drop(events);
+        let seen = events.lock().unwrap();
+        assert!(seen.iter().any(|e| matches!(e, Event::Repeat(1))) && seen.iter().any(|e| matches!(e, Event::Shuffle(true))));
+        drop(seen);
         p.event(&json!({ "type": "playback_state", "status": "playing", "item": song("a"), "is_active": true })).await;
         assert!(p.playing, "and back again");
+        // As Soloist says it for a Daily Mix, and then for a playlist.
+        p.event(&json!({ "type": "playback_state", "available_actions": { "play": {}, "skip_next": {} } })).await;
+        p.event(&json!({ "type": "playback_state", "available_actions": { "set_shuffle": {}, "set_repeat": {} } })).await;
+        let seen = events.lock().unwrap();
+        let allowed: Vec<_> = seen.iter().filter_map(|e| if let Event::Allowed { shuffle, repeat } = *e { Some((shuffle, repeat)) } else { None }).collect();
+        assert_eq!(allowed, [(false, false), (true, true)]);
     }
 
     #[tokio::test]

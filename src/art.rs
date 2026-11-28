@@ -336,8 +336,8 @@ pub struct Panel {
     pub y: f32,
     pub width: f32,
     pub height: f32,
-    /// What the app is about (the songs), not its chrome: Liquid Glass leaves it opaque.
-    pub content: bool,
+    /// Drawn solid instead of as glass, as when Windows' transparency effects are off.
+    pub opaque: bool,
 }
 
 /// How far the shadow of a panel reaches, and how far down it is moved.
@@ -347,10 +347,10 @@ const SHADOW_DROP: f32 = 6.;
 /// looks. The middle stays clear. Tuned by eye; Apple publishes no numbers.
 const RIM: f32 = 26.;
 const BEND: f32 = 22.;
-/// How much the content layer is raised above the backdrop, towards `Style::over`.
+/// How much a solid panel is raised above the backdrop, towards `Style::over`.
 const ELEVATED: f32 = 0.07;
 /// Light on the top of the glass, and how far down it reaches (see Theme in glass.slint).
-const SHEEN: f32 = 13. / 255.;
+const SHEEN: f32 = 5. / 255.;
 const SHEEN_HEIGHT: f32 = 120.;
 
 impl Scene {
@@ -434,7 +434,7 @@ impl Scene {
         let outline = (1.2 - inside).clamp(0., 1.);
         let surface = match self.style.surface {
             // An opaque surface a little lighter than the backdrop, outlined by a hairline.
-            Surface::Glass if panel.content => {
+            Surface::Glass if panel.opaque => {
                 let tint = self.palette.tint.map(f32::from);
                 Surface::Flat(self::mix(tint, self.style.over().map(f32::from), ELEVATED), 1., 0.1)
             }
@@ -502,8 +502,8 @@ impl Scene {
 pub fn preview(cover: Option<&Pixels>, style: &Style, tint: f32, size: (u32, u32)) -> SharedPixelBuffer<Rgb8Pixel> {
     let Look { backdrop, palette, .. } = look(cover, style);
     let scale = size.0 as f32 / 320.;
-    let panel = |x, y, width, height, content| Panel { x, y, width, height, content };
-    let panels = vec![panel(12., 12., 74., 118., false), panel(98., 12., 210., 118., true), panel(12., 142., 296., 34., false)];
+    let panel = |x, y, width, height| Panel { x, y, width, height, opaque: false };
+    let panels = vec![panel(12., 12., 74., 118.), panel(98., 12., 210., 118.), panel(12., 142., 296., 34.)];
     let scene = Scene { backdrop, palette, style: *style, tint, size, scale, panels };
     let mut out = scene.paint();
     // A few strokes standing for text and buttons.
@@ -799,7 +799,7 @@ mod tests {
                     let worst: fn(f32, f32) -> f32 = if style.bright { f32::min } else { f32::max };
                     // The worst place text can be: a selected item under the sheen of the
                     // clearest glass with the pointer's light on it (see Theme in glass.slint).
-                    for content in [false, true] {
+                    for opaque in [false, true] {
                     let scene = Scene {
                         backdrop: backdrop.clone(),
                         palette: p,
@@ -807,7 +807,7 @@ mod tests {
                         tint: crate::settings::MIN_TINT,
                         size: (90, 90),
                         scale: 1.,
-                        panels: vec![Panel { x: 5., y: 5., width: 80., height: 80., content }],
+                        panels: vec![Panel { x: 5., y: 5., width: 80., height: 80., opaque }],
                     };
                     let painted = scene.paint();
                     let text_area = (0..90 * 90).filter(|i| (27..63).contains(&(i % 90)) && (27..63).contains(&(i / 90)));
@@ -823,7 +823,7 @@ mod tests {
                     for (name, color) in [("accent", p.accent), ("text", p.text), ("dim", p.dim)] {
                         for (place, back) in [("backdrop", bare), ("glass", glass)] {
                             let c = contrast(luminance(color), back);
-                            assert!(c >= 4.5, "{style:?}: {name} on {place} (content: {content}) over {r},{g},{b}: {c}");
+                            assert!(c >= 4.5, "{style:?}: {name} on {place} (opaque: {opaque}) over {r},{g},{b}: {c}");
                         }
                     }
                     }
@@ -908,8 +908,8 @@ mod tests {
     }
 
     #[test]
-    fn the_rim_is_white_light_from_the_top_left_and_content_is_opaque() {
-        let panels = vec![Panel { x: 20., y: 20., width: 160., height: 160., content: false }, Panel { x: 220., y: 20., width: 160., height: 160., content: true }];
+    fn the_rim_is_white_light_from_the_top_left_and_solid_panels_are_even() {
+        let panels = vec![Panel { x: 20., y: 20., width: 160., height: 160., opaque: false }, Panel { x: 220., y: 20., width: 160., height: 160., opaque: true }];
         let painted = scene((400, 200), 1., panels).paint();
         let at = |x: usize, y: usize| painted.as_slice()[y * 400 + x];
         let sum = |p: Rgb8Pixel| p.r as u32 + p.g as u32 + p.b as u32;
@@ -917,7 +917,7 @@ mod tests {
         assert!(sum(left) > sum(right) && sum(right) > sum(middle) + 30, "{left:?} {right:?} {middle:?}");
         // No colour from the fills: the light is white, as it is on Apple's glass.
         assert!(left.r.abs_diff(left.b) < 12, "{left:?}");
-        // Content is one even surface, without the glass's lens or rim.
+        // A solid panel is one even surface, without the glass's lens or rim.
         assert_eq!(at(300, 60), at(300, 140));
     }
 
@@ -938,10 +938,10 @@ mod tests {
     #[test]
     fn odd_windows_and_panels_do_not_panic() {
         let panels = vec![
-            Panel { x: -50., y: -50., width: 80., height: 70., content: false },
-            Panel { x: 900., y: 900., width: 10., height: 10., content: false },
-            Panel { x: 10., y: 10., width: 0., height: 0., content: false },
-            Panel { x: 0., y: 0., width: 4000., height: 4000., content: false },
+            Panel { x: -50., y: -50., width: 80., height: 70., opaque: false },
+            Panel { x: 900., y: 900., width: 10., height: 10., opaque: false },
+            Panel { x: 10., y: 10., width: 0., height: 0., opaque: false },
+            Panel { x: 0., y: 0., width: 4000., height: 4000., opaque: false },
         ];
         for size in [(0, 0), (0, 5), (1, 1), (7, 3), (333, 111)] {
             for scale in [1., 1.5, 2.] {
@@ -953,7 +953,7 @@ mod tests {
 
     #[test]
     fn painting_a_full_screen_is_quick() {
-        let panels = vec![Panel { x: 12., y: 70., width: 300., height: 850., content: false }, Panel { x: 324., y: 70., width: 1280., height: 850., content: false }];
+        let panels = vec![Panel { x: 12., y: 70., width: 300., height: 850., opaque: false }, Panel { x: 324., y: 70., width: 1280., height: 850., opaque: false }];
         let start = std::time::Instant::now();
         scene((1920, 1080), 1., panels).paint();
         // Generous: this also runs unoptimized. It is done on another thread anyway.

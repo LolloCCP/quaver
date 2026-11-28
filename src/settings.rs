@@ -4,7 +4,7 @@ use std::{
 };
 
 pub const BANDS: usize = 10;
-pub const MIN_TINT: f32 = 0.4;
+pub const MIN_TINT: f32 = 0.2;
 /// Largest boost or cut of one equalizer band, in dB.
 pub const MAX_GAIN: f32 = 12.;
 
@@ -48,7 +48,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bitrate: 320, normalise: false, tray: true, tint: 0.45, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1, gpu: true, links: false, lyric_lines: 0 }
+        Self { bitrate: 320, normalise: false, tray: true, tint: 0.2, motion: true, theme: "glass".into(), custom: [[30, 34, 54], [255, 150, 80]], soloist: false, offline: false, music: music_folder(), eq_on: false, eq: [0.; BANDS], version: String::new(), updates: true, stage: 1, gpu: true, links: false, lyric_lines: 0 }
     }
 }
 

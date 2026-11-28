@@ -152,6 +152,8 @@ pub enum Event {
     Volume(u16),
     Shuffle(bool),
     Repeat(u8),
+    /// Whether Spotify lets the list that plays be shuffled and repeated: a Daily Mix or a radio can't.
+    Allowed { shuffle: bool, repeat: bool },
     /// How the chosen player is doing, for the settings.
     Player(String),
     /// Whether Soloist is signed in, once that is clear.

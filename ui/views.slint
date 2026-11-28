@@ -879,7 +879,7 @@ export component SettingsView inherits ScrollView {
                 height: 40px;
                 Text { text: "Glass"; color: Theme.text; vertical-alignment: center; }
                 Text { text: "Clear"; color: Theme.dim; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; horizontal-alignment: right; }
-                VerticalLayout { alignment: center; Bar { width: 180px; live: true; label: "Glass darkness"; value: (Theme.tint - 0.4) / 0.45; commit(v) => { root.set-tint(0.4 + v * 0.45); } } }
+                VerticalLayout { alignment: center; Bar { width: 180px; live: true; label: "Glass darkness"; value: (Theme.tint - 0.2) / 0.65; commit(v) => { root.set-tint(0.2 + v * 0.65); } } }
                 Text { text: "Dark"; color: Theme.dim; font-size: 12px; vertical-alignment: center; }
             }
             if root.theme == "custom": HorizontalLayout {
