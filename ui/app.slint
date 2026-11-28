@@ -5,6 +5,48 @@ import { ThemeCard, Version, TrackRow, Row, NowPlaying, SettingsView } from "vie
 
 export { Theme, Custom, Scene, Playing, ThemeCard, Version, TrackRow, Card, Shelf }
 
+// A box over the page. Escape, its close button or a click beside it closes it.
+component Dialog inherits Rectangle {
+    in property <string> title;
+    in property <brush> surface;
+    in property <length> box-width: 440px;
+    // Zero: as tall as what is in it.
+    in property <length> box-height;
+    // For a dialog without a field to type in, which would otherwise take the keys.
+    in property <bool> take-keys;
+    callback close();
+    background: #00000080;
+    TouchArea { clicked => { root.close(); } }
+    keys := FocusScope {
+        init => { if (root.take-keys) { self.focus(); } }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) { root.close(); return accept; }
+            return reject;
+        }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.box-width, root.width - 40px);
+            height: root.box-height > 0 ? min(root.box-height, root.height - 80px) : content.preferred-height;
+            border-radius: 18px;
+            background: root.surface;
+            border-width: 1px;
+            border-color: Theme.hover-line;
+            TouchArea { }
+            content := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.title; color: Theme.text; font-size: 20px; font-weight: 700; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
+                    VerticalLayout { alignment: start; Icon { glyph: "\u{e711}"; label: "Close “" + root.title + "”"; size: 12px; clicked => { root.close(); } } }
+                }
+                @children
+            }
+        }
+    }
+}
+
 export component App inherits Window {
     title: root.track-title == "" ? "Rustbeat" : root.track-title + " · " + root.track-artist;
     icon: @image-url("icon.svg");
@@ -167,6 +209,8 @@ export component App inherits Window {
     callback set-follow(string, bool);
     in property <[ThemeCard]> themes;
     in property <string> theme;
+    // What dialogs, the Jam box and messages are drawn on.
+    property <brush> surface: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
     in property <bool> glass-theme: true;
     callback set-theme-id(string);
     callback settings-shown();
@@ -686,7 +730,7 @@ export component App inherits Window {
                             Cover { source: root.thumb; loaded: root.has-cover; }
                             Rectangle {
                                 visible: open-cover.has-hover || cover-focus.has-focus;
-                                border-radius: 12px;
+                                border-radius: 14px;
                                 background: #00000099;
                                 Text { text: "\u{e740}"; font-family: Theme.icons; font-size: 18px; color: white; horizontal-alignment: center; vertical-alignment: center; }
                             }
@@ -729,7 +773,7 @@ export component App inherits Window {
                         width: max(240px, root.width * 0.24);
                         spacing: 4px;
                         alignment: end;
-                        if !root.offline: VerticalLayout { alignment: center; Icon { glyph: "\u{e716}"; label: root.jam.length > 0 ? "Jam, " + root.jam.length + " listening" : "Jam"; on: root.jam.length > 0; clicked => { root.jam-open = !root.jam-open; } } }
+                        if !root.offline: VerticalLayout { alignment: center; Icon { glyph: "\u{e7f6}"; label: root.jam.length > 0 ? "Jam, " + root.jam.length + " listening" : "Jam"; on: root.jam.length > 0; clicked => { root.jam-open = !root.jam-open; } } }
                         VerticalLayout { alignment: center; Icon { glyph: "\u{e8bd}"; label: "Open lyrics"; clicked => { root.lyrics-open = true; root.now-playing = true; } } }
                         VerticalLayout { alignment: center; Icon { glyph: "\u{e8fd}"; label: "Up next"; on: root.list-shown && root.list-title == "Up next"; clicked => { root.show-list("", ""); root.queue(); } } }
                         if root.width >= 1160px: VerticalLayout { alignment: center; Icon { glyph: "\u{e90d}"; label: root.panel-open ? "Close the now playing panel" : "Open the now playing panel"; on: root.panel-shown; clicked => { root.panel-open = !root.panel-open; } } }
@@ -745,117 +789,83 @@ export component App inherits Window {
         }
 
         // Adds a song to one of one's playlists, or makes a new one.
-        if root.picker-open && root.ready: Rectangle {
+        if root.picker-open && root.ready: Dialog {
             width: root.width;
             height: root.height;
-            background: #00000066;
-            TouchArea { clicked => { root.picker-open = false; } }
-            FocusScope {
-                key-pressed(e) => {
-                    if (e.text == Key.Escape) { root.picker-open = false; return accept; }
-                    return reject;
+            title: root.picker-track == "" ? "New playlist" : "Add to playlist";
+            surface: root.surface;
+            // As tall as its playlists need, up to most of the window.
+            box-height: root.picker-track == "" ? 0px : min(560px, 150px + max(1, root.picker-lists.length) * 60px);
+            close => { root.picker-open = false; }
+            HorizontalLayout {
+                spacing: 8px;
+                name := SearchBox {
+                    placeholder: "Name of a new playlist";
+                    glyph: "\u{e710}";
+                    init => { self.take-focus(); }
+                    accepted(text) => { root.new-playlist(text, root.picker-track); root.picker-open = false; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Pill { text: "Create"; enabled: name.value != ""; clicked => { root.new-playlist(name.value, root.picker-track); root.picker-open = false; } }
                 }
             }
-            Rectangle {
-                x: (root.width - self.width) / 2;
-                y: (root.height - self.height) / 2;
-                width: min(440px, root.width - 40px);
-                // As tall as its playlists need, up to most of the window.
-                height: root.picker-track == "" ? picker-box.preferred-height : min(560px, root.height - 80px, 150px + max(1, root.picker-lists.length) * 60px);
-                border-radius: 18px;
-                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
-                border-width: 1px;
-                border-color: Theme.hover-line;
-                TouchArea { }
-                picker-box := VerticalLayout {
-                    padding: 20px;
-                    spacing: 12px;
-                    HorizontalLayout {
-                        Text { text: root.picker-track == "" ? "New playlist" : "Add to playlist"; color: Theme.text; font-size: 20px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
-                        Icon { glyph: "\u{e711}"; label: "Close"; size: 12px; clicked => { root.picker-open = false; } }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        name := SearchBox {
-                            placeholder: "Name of a new playlist";
-                            glyph: "\u{e710}";
-                            init => { self.take-focus(); }
-                            accepted(text) => { root.new-playlist(text, root.picker-track); root.picker-open = false; }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            Pill { text: "Create"; enabled: name.value != ""; clicked => { root.new-playlist(name.value, root.picker-track); root.picker-open = false; } }
-                        }
-                    }
-                    if root.picker-track != "" && root.picker-lists.length == 0: Text { text: "You have no playlists to add songs to yet."; color: Theme.dim; wrap: word-wrap; }
-                    if root.picker-track != "": ListView {
-                        vertical-stretch: 1;
-                        for p in root.picker-lists: LibraryItem {
-                            card: p;
-                            clicked => { root.add-to-playlist(p.uri, p.title, root.picker-track); root.picker-open = false; }
-                            need-picture(kind, id) => { root.need-picture(kind, id); }
-                        }
-                    }
+            if root.picker-track != "" && root.picker-lists.length == 0: Text { text: "You have no playlists to add songs to yet."; color: Theme.dim; wrap: word-wrap; }
+            if root.picker-track != "": ListView {
+                vertical-stretch: 1;
+                for p in root.picker-lists: LibraryItem {
+                    card: p;
+                    clicked => { root.add-to-playlist(p.uri, p.title, root.picker-track); root.picker-open = false; }
+                    need-picture(kind, id) => { root.need-picture(kind, id); }
                 }
             }
         }
 
         // A playlist's name and settings, and deleting it.
-        if root.edit-open && root.ready: edit-dialog := Rectangle {
+        if root.edit-open && root.ready: edit-dialog := Dialog {
             width: root.width;
             height: root.height;
-            background: #00000066;
+            title: "Edit playlist";
+            surface: root.surface;
+            box-width: 460px;
+            close => { root.edit-open = false; }
             property <bool> collaborative: root.edit-collaborative;
             property <bool> public: root.edit-public;
             // Deleting takes a second press.
             property <bool> deleting;
-            TouchArea { clicked => { root.edit-open = false; } }
-            Rectangle {
-                x: (root.width - self.width) / 2;
-                y: (root.height - self.height) / 2;
-                width: min(460px, root.width - 40px);
-                height: edit-box.preferred-height;
-                border-radius: 18px;
-                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
-                border-width: 1px;
-                border-color: Theme.hover-line;
-                TouchArea { }
-                edit-box := VerticalLayout {
-                    padding: 20px;
-                    spacing: 12px;
-                    HorizontalLayout {
-                        Text { text: "Edit playlist"; color: Theme.text; font-size: 20px; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
-                        Icon { glyph: "\u{e711}"; label: "Close"; size: 12px; clicked => { root.edit-open = false; } }
-                    }
-                    edit-name := SearchBox {
-                        placeholder: "Name";
-                        glyph: "\u{e70f}";
-                        init => { self.set-text(root.edit-name); self.take-focus(); }
-                    }
-                    edit-about := SearchBox {
-                        placeholder: "Add a description (optional)";
-                        glyph: "\u{e8d2}";
-                        init => { self.set-text(root.edit-description); }
-                    }
-                    Switch { text: "Collaborative"; note: "People you share it with can add songs."; checked: edit-dialog.collaborative; toggled(on) => { edit-dialog.collaborative = on; } }
-                    Switch { text: "On your profile"; note: "Others can find it on your page."; checked: edit-dialog.public; toggled(on) => { edit-dialog.public = on; } }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Pill {
-                            quiet: true;
-                            text: edit-dialog.deleting ? "Really delete it?" : "Delete";
-                            clicked => {
-                                if (edit-dialog.deleting) { root.delete-playlist(); root.edit-open = false; root.go-home(); }
-                                edit-dialog.deleting = true;
-                            }
+            edit-name := SearchBox {
+                placeholder: "Name";
+                glyph: "\u{e70f}";
+                init => { self.set-text(root.edit-name); self.take-focus(); }
+            }
+            edit-about := SearchBox {
+                placeholder: "Add a description (optional)";
+                glyph: "\u{e8d2}";
+                init => { self.set-text(root.edit-description); }
+            }
+            Switch { text: "Collaborative"; note: "People you share it with can add songs"; checked: edit-dialog.collaborative; toggled(on) => { edit-dialog.collaborative = on; } }
+            Switch { text: "On your profile"; note: "Others can find it on your page"; checked: edit-dialog.public; toggled(on) => { edit-dialog.public = on; } }
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        quiet: true;
+                        text: edit-dialog.deleting ? "Really delete it?" : "Delete";
+                        clicked => {
+                            if (edit-dialog.deleting) { root.delete-playlist(); root.edit-open = false; root.go-home(); }
+                            edit-dialog.deleting = true;
                         }
-                        Rectangle { horizontal-stretch: 1; }
-                        Pill { quiet: true; text: "Cancel"; clicked => { root.edit-open = false; } }
-                        Pill {
-                            text: "Save";
-                            enabled: edit-name.value != "";
-                            clicked => { root.save-playlist(edit-name.value, edit-about.value, edit-dialog.collaborative, edit-dialog.public); root.edit-open = false; }
-                        }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout { alignment: center; Pill { quiet: true; text: "Cancel"; clicked => { root.edit-open = false; } } }
+                VerticalLayout {
+                    alignment: center;
+                    Pill {
+                        text: "Save";
+                        enabled: edit-name.value != "";
+                        clicked => { root.save-playlist(edit-name.value, edit-about.value, edit-dialog.collaborative, edit-dialog.public); root.edit-open = false; }
                     }
                 }
             }
@@ -878,14 +888,14 @@ export component App inherits Window {
                 width: 340px;
                 height: jam-box.preferred-height;
                 border-radius: 18px;
-                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
+                background: root.surface;
                 border-width: 1px;
                 border-color: Theme.hover-line;
                 TouchArea { }
                 jam-box := VerticalLayout {
-                    padding: 22px;
+                    padding: 20px;
                     spacing: 12px;
-                    Text { text: root.jam.length > 0 ? "Jam" : "No Jam right now"; color: Theme.text; font-size: 18px; font-weight: 700; }
+                    Text { text: root.jam.length > 0 ? "Jam" : "No Jam right now"; color: Theme.text; font-size: 20px; font-weight: 700; }
                     if root.jam.length == 0: Text { text: "Open a Jam invite link to join it here, or start one in the Spotify app and pick Rustbeat as the speaker. It shows up here, and Rustbeat leaves the order of songs to the Jam."; color: Theme.dim; wrap: word-wrap; }
                     for name in root.jam: HorizontalLayout {
                         spacing: 10px;
@@ -904,7 +914,7 @@ export component App inherits Window {
             width: min(root.width - 80px, toast-text.preferred-width + 48px);
             height: max(46px, toast-text.preferred-height + 22px);
             border-radius: 23px;
-            background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fffffff5 : #16161cf5;
+            background: root.surface;
             border-width: 1px;
             border-color: Theme.hover-line;
             accessible-role: text;
@@ -912,38 +922,21 @@ export component App inherits Window {
             toast-text := Text { text: root.toast; color: Theme.text; wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center; }
         }
 
-        if root.blocked: Rectangle {
+        if root.blocked: Dialog {
             width: root.width;
             height: root.height;
-            background: #000000a6;
-            TouchArea { }
-            FocusScope {
-                init => { self.focus(); }
-                key-pressed(e) => {
-                    if (e.text == Key.Escape) { root.blocked = false; return accept; }
-                    return reject;
-                }
-            }
-            Rectangle {
-                width: min(560px, root.width - 64px);
-                height: dialog.preferred-height;
-                border-radius: 24px;
-                background: root.theme == "custom" ? Theme.glass : Theme.bright ? #fcfaf6 : #17171d;
-                border-width: 1px;
-                border-color: Theme.hover-line;
-                dialog := VerticalLayout {
-                    padding: 34px;
-                    spacing: 16px;
-                    Text { text: "Spotify won't let this account play here yet"; color: Theme.text; font-size: 22px; font-weight: 700; wrap: word-wrap; }
-                    Text { text: "Rustbeat found the song, but Spotify refused to unlock it for the built-in player. It does that for newer accounts, and no app can change it."; color: Theme.dim; wrap: word-wrap; }
-                    Text { text: "Soloist is Spotify's own small player, and Rustbeat can play through it. It takes a download, a free key from Spotify, and picking Rustbeat once in the Spotify app."; color: Theme.dim; wrap: word-wrap; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        alignment: start;
-                        Pill { text: "Set up Soloist"; clicked => { root.blocked = false; root.now-playing = false; root.settings-open = true; } }
-                        VerticalLayout { alignment: center; Pill { quiet: true; text: "Not now"; clicked => { root.blocked = false; } } }
-                    }
-                }
+            title: "Spotify won't let this account play here yet";
+            surface: root.surface;
+            box-width: 560px;
+            take-keys: true;
+            close => { root.blocked = false; }
+            Text { text: "Rustbeat found the song, but Spotify refused to unlock it for the built-in player. It does that for newer accounts, and no app can change it."; color: Theme.dim; wrap: word-wrap; }
+            Text { text: "Soloist is Spotify's own small player, and Rustbeat can play through it. It takes a download, a free key from Spotify, and picking Rustbeat once in the Spotify app."; color: Theme.dim; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                VerticalLayout { alignment: center; Pill { text: "Set up Soloist"; clicked => { root.blocked = false; root.now-playing = false; root.settings-open = true; } } }
+                VerticalLayout { alignment: center; Pill { quiet: true; text: "Not now"; clicked => { root.blocked = false; } } }
             }
         }
     }

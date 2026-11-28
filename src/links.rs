@@ -115,6 +115,17 @@ fn get(sub: &str, value: &str) -> Option<String> {
     (code == 0).then(|| String::from_utf16_lossy(&data[..(size as usize / 2).saturating_sub(1)]))
 }
 
+/// Whether Windows' "Transparency effects" are on (Settings, Personalization, Colors). Here
+/// because the registry is read here; the glass theme turns opaque without them.
+pub fn transparency_on() -> bool {
+    const RRF_RT_REG_DWORD: u32 = 0x10;
+    let mut on = 1u32;
+    let mut size = 4u32;
+    let (sub, value) = (r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "EnableTransparency");
+    let code = unsafe { RegGetValueW(HKEY_CURRENT_USER, wide(sub).as_ptr(), wide(value).as_ptr(), RRF_RT_REG_DWORD, null_mut(), (&raw mut on).cast(), &mut size) };
+    code != 0 || on != 0
+}
+
 fn set(sub: &str, value: &str, text: &str) -> io::Result<()> {
     let data = wide(text);
     checked(unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, wide(sub).as_ptr(), wide(value).as_ptr(), REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) })

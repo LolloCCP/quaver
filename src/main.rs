@@ -43,6 +43,8 @@ const THUMB: f32 = 66.;
 const FADE_MS: i64 = 700;
 /// Panels that are painted: library, main, player bar, now playing.
 const PANELS: usize = 4;
+/// The main panel, with the songs: Liquid Glass leaves content opaque (see art::Panel).
+const CONTENT_PANEL: i32 = 2;
 const STARTING: &str = "Starting…";
 /// Longest double-click Windows allows by default.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
@@ -653,7 +655,9 @@ impl Ui {
         scene.scale = self.app.window().scale_factor();
         scene.tint = self.shared.lock().tint;
         let panels = self.app.get_ready() && !self.app.get_now_playing();
-        scene.panels = self.panels.iter().filter(|p| panels && p.width > 0.).copied().collect();
+        // Without Windows' transparency effects there is no glass at all.
+        let opaque = !links::transparency_on();
+        scene.panels = self.panels.iter().filter(|p| panels && p.width > 0.).map(|p| art::Panel { content: p.content || opaque, ..*p }).collect();
         self.painting += 1;
         let (painting, fade) = (self.painting, std::mem::take(&mut self.new_look));
         std::thread::spawn(move || {
@@ -1886,7 +1890,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let theme = app.global::<Theme>();
     theme.set_glow(art::glow());
     app.global::<Scene>().on_placed(|panel, x, y, width, height| {
-        let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.place(panel, art::Panel { x, y, width, height })));
+        let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.place(panel, art::Panel { x, y, width, height, content: panel == CONTENT_PANEL })));
     });
     app.on_repaint(|| {
         let _ = slint::invoke_from_event_loop(|| with_ui(|ui| ui.repaint_soon()));
@@ -1975,7 +1979,7 @@ fn main() -> Result<(), slint::PlatformError> {
         palette: look.palette,
         fade: slint::Timer::default(),
         scene: art::Scene { backdrop: look.backdrop.clone(), palette: look.palette, style, tint: 0., size: (0, 0), scale: 1., panels: vec![] },
-        panels: [art::Panel { x: 0., y: 0., width: 0., height: 0. }; PANELS],
+        panels: [art::Panel { x: 0., y: 0., width: 0., height: 0., content: false }; PANELS],
         painting: 0,
         repaint: slint::Timer::default(),
         new_look: false,
